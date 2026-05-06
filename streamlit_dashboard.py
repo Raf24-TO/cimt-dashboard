@@ -209,6 +209,14 @@ def main():
             line-height: 1.3 !important;
             height: auto !important;
         }
+        /* Remove Streamlit's default ~5rem bottom padding on the main
+           content container, so the in-flow footer sits flush at the bottom
+           edge of the page instead of leaving a big empty band below it. */
+        section.main > div.block-container,
+        [data-testid="stMain"] > div.block-container,
+        .main .block-container {
+            padding-bottom: 0 !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -279,15 +287,119 @@ def main():
 
         st.header("Filters")
 
-        sel_category = st.selectbox(
-            "Category",
-            options=[ALL] + [c["label"] for c in categories],
-            format_func=lambda c: c if c == ALL else f"{cat_to_tier[c]} · {c}",
+        # Reusable "All vs specifics" auto-deselect logic, parameterized by
+        # the session-state keys used by each multiselect.
+        def _make_all_or_specific_callback(state_key: str, prev_key: str):
+            def _cb() -> None:
+                sel = list(st.session_state.get(state_key, []) or [])
+                prev = list(st.session_state.get(prev_key, [ALL]))
+                if ALL in sel and ALL not in prev:
+                    new_sel = [ALL]
+                elif ALL in sel and any(c != ALL for c in sel):
+                    new_sel = [c for c in sel if c != ALL]
+                elif not sel:
+                    new_sel = [ALL]
+                else:
+                    new_sel = sel
+                st.session_state[state_key] = new_sel
+                st.session_state[prev_key] = new_sel
+            return _cb
+
+        # ---- Tier filter ------------------------------------------------
+        tiers_avail = sorted({c["tier"] for c in categories})
+        if "tier_select" not in st.session_state:
+            st.session_state["tier_select"] = [ALL]
+        sel_tiers_raw = st.multiselect(
+            "Tier",
+            options=[ALL] + tiers_avail,
+            key="tier_select",
+            on_change=_make_all_or_specific_callback("tier_select", "tier_prev"),
             help=(
-                "Plain-English grid-equipment categories from categorization.md. "
-                "Selecting one auto-picks the matching HS-4 code."
+                "High-level grouping from categorization.md. "
+                "Filters the Category list below."
             ),
         )
+        st.session_state.setdefault("tier_prev", list(sel_tiers_raw))
+        if ALL in sel_tiers_raw or not sel_tiers_raw:
+            sel_tiers = set(tiers_avail)
+        else:
+            sel_tiers = {t for t in sel_tiers_raw if t != ALL}
+
+        # ---- Category filter (scoped by Tier) ---------------------------
+        visible_categories = [c for c in categories if c["tier"] in sel_tiers]
+        if "category_select" not in st.session_state:
+            st.session_state["category_select"] = [ALL]
+        sel_categories_raw = st.multiselect(
+            "Category",
+            options=[ALL] + [c["label"] for c in visible_categories],
+            format_func=lambda c: c,
+            key="category_select",
+            on_change=_make_all_or_specific_callback(
+                "category_select", "category_prev"
+            ),
+            help=(
+                "Grid-equipment categories. Pick one or several — the "
+                "matching HS-4 codes are used automatically."
+            ),
+        )
+        st.session_state.setdefault("category_prev", list(sel_categories_raw))
+
+        if ALL in sel_categories_raw or not sel_categories_raw:
+            sel_categories = []
+        else:
+            sel_categories = [c for c in sel_categories_raw if c != ALL]
+
+        if sel_categories:
+            selected_hs4_set = {cat_to_hs4[c] for c in sel_categories}
+            sel_hs4 = ALL  # individual HS-4 picker is hidden when categories rule
+            codes_str = ", ".join(f"`{h}`" for h in sorted(selected_hs4_set))
+            st.markdown(
+                f"<div style='color:#444;font-size:13px;margin:4px 0 8px;'>"
+                f"<b>HS-4:</b> {codes_str} "
+                f"<span style='color:#888;'>(from {len(sel_categories)} "
+                f"categor{'ies' if len(sel_categories) != 1 else 'y'})</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            selected_hs4_set = None
+            sel_hs4 = st.selectbox(
+                "HS-4 (heading)",
+                options=[ALL] + hs4_codes,
+                format_func=lambda c: c if c == ALL else f"{c} — {hs4_desc.get(c, '')}",
+            )
+
+        # HS-6 options scoped by either the categories' HS-4 set or the
+        # individual HS-4 picker.
+        if selected_hs4_set:
+            visible_hs6 = [c for c in all_hs6 if c[:4] in selected_hs4_set]
+        elif sel_hs4 == ALL:
+            visible_hs6 = all_hs6
+        else:
+            visible_hs6 = [c for c in all_hs6 if c.startswith(sel_hs4)]
+
+        if "hs6_select" not in st.session_state:
+            st.session_state["hs6_select"] = [ALL]
+        sel_hs_raw = st.multiselect(
+            "HS-6 code",
+            options=[ALL] + visible_hs6,
+            format_func=lambda c: c if c == ALL else f"{c} — {hs6_desc.get(c, '')}",
+            key="hs6_select",
+            on_change=_make_all_or_specific_callback("hs6_select", "hs6_prev"),
+        )
+        st.session_state.setdefault("hs6_prev", list(sel_hs_raw))
+        st.caption(
+            "**HS** (Harmonized System) is the 6-digit international product "
+            "code used in customs declarations. It overlaps in scope with "
+            "**NAICS / NAPCS** (the StatCan industry / product classifications) "
+            "but is organized by *product type* rather than *industry*, so "
+            "exact one-to-one mapping isn't possible."
+        )
+        # 'All' (or empty) expands to everything visible.
+        if ALL in sel_hs_raw or not sel_hs_raw:
+            sel_hs = visible_hs6
+        else:
+            sel_hs = [c for c in sel_hs_raw if c != ALL]
 
         CUSTOM_RANGE = "Custom range…"
         year_options = list(years_avail) + [CUSTOM_RANGE]
@@ -297,7 +409,6 @@ def main():
             index=len(years_avail) - 1 if years_avail else 0,
             format_func=lambda y: y if y == CUSTOM_RANGE else str(int(y)),
         )
-
         if sel_year_choice == CUSTOM_RANGE and years_avail:
             min_y, max_y = int(min(years_avail)), int(max(years_avail))
             if min_y == max_y:
@@ -318,45 +429,6 @@ def main():
                 ]
         else:
             sel_years = [int(sel_year_choice)] if sel_year_choice is not None else []
-
-        if sel_category != ALL:
-            sel_hs4 = cat_to_hs4[sel_category]
-            st.markdown(
-                f"**HS-4:** `{sel_hs4}` &nbsp;<span style='color:#888;font-size:12px;'>"
-                f"(from category)</span>",
-                unsafe_allow_html=True,
-            )
-        else:
-            sel_hs4 = st.selectbox(
-                "HS-4 (heading)",
-                options=[ALL] + hs4_codes,
-                format_func=lambda c: c if c == ALL else f"{c} — {hs4_desc.get(c, '')}",
-            )
-
-        # HS-6 options scoped by HS-4 selection.
-        if sel_hs4 == ALL:
-            visible_hs6 = all_hs6
-        else:
-            visible_hs6 = [c for c in all_hs6 if c.startswith(sel_hs4)]
-
-        sel_hs_raw = st.multiselect(
-            "HS-6 code",
-            options=[ALL] + visible_hs6,
-            default=[ALL],
-            format_func=lambda c: c if c == ALL else f"{c} — {hs6_desc.get(c, '')}",
-        )
-        st.caption(
-            "**HS** (Harmonized System) is the 6-digit international product "
-            "code used in customs declarations. It overlaps in scope with "
-            "**NAICS / NAPCS** (the StatCan industry / product classifications) "
-            "but is organized by *product type* rather than *industry*, so "
-            "exact one-to-one mapping isn't possible."
-        )
-        # 'All' (or empty) expands to everything visible.
-        if ALL in sel_hs_raw or not sel_hs_raw:
-            sel_hs = visible_hs6
-        else:
-            sel_hs = [c for c in sel_hs_raw if c != ALL]
 
         top_n = st.slider(
             "Top N origins on map", min_value=5, max_value=100, value=30, step=5
@@ -491,6 +563,37 @@ def main():
 
     folium_map_html = _build_folium_map(map_df, total)
 
+    # Treemap data: each origin sized by current-window value, coloured by
+    # YoY change (most recent selected year vs the year before).
+    latest_yr = max(sel_years)
+    prior_yr = latest_yr - 1
+    deflated_full = apply_deflation(
+        df[df["hs6"].isin(sel_hs) & (df["country"] != "CA")], cad_basis
+    )
+    cur_by_country = (
+        deflated_full[deflated_full["year"] == latest_yr]
+        .groupby("country")["value_cad"].sum()
+    )
+    prv_by_country = (
+        deflated_full[deflated_full["year"] == prior_yr]
+        .groupby("country")["value_cad"].sum()
+    )
+
+    def _yoy(iso: str) -> float | None:
+        prv = float(prv_by_country.get(iso, 0.0))
+        cur = float(cur_by_country.get(iso, 0.0))
+        if prv <= 0:
+            return None
+        return (cur - prv) / prv * 100.0
+
+    treemap_df = plotted[["country", "country_name", "value_cad"]].copy()
+    treemap_df = treemap_df.dropna(subset=["country_name"])
+    treemap_df = treemap_df[treemap_df["value_cad"] > 0]
+    treemap_df["yoy_pct"] = treemap_df["country"].apply(_yoy)
+    treemap_fig = _build_treemap(
+        treemap_df, basis_label, prior_yr, latest_yr
+    )
+
     # ------------------------------------------------------------------
     # Stacked bar chart: per-year imports across the full year range.
     # Each year shows its OWN top 5 origins plus an "Others" bucket, so the
@@ -598,10 +701,19 @@ def main():
                 ),
             )
         )
+    # Dynamically size the bottom margin so a legend with many countries (the
+    # union of every year's top 5 can easily reach 10+ entries) never spills
+    # back into the plot area.
+    n_traces = len(bar_fig.data)
+    legend_rows = max(1, math.ceil(n_traces / 3))
+    legend_px = 30 + legend_rows * 22
+    plot_px = 460
+    fig_height = plot_px + legend_px
+
     bar_fig.update_layout(
         barmode="stack",
-        height=480,
-        margin=dict(l=10, r=10, t=30, b=30),
+        height=fig_height,
+        margin=dict(l=10, r=10, t=30, b=legend_px),
         title=dict(
             text=(
                 "Annual imports — each year's top 5 origins + Others "
@@ -610,15 +722,21 @@ def main():
             x=0,
             font=dict(size=14),
         ),
-        xaxis=dict(title=None, dtick=1),
-        yaxis=dict(title=f"Value ({basis_label})", tickformat="$,.0s"),
+        xaxis=dict(title=None, dtick=1, automargin=True),
+        yaxis=dict(
+            title=f"Value ({basis_label})",
+            tickformat="$,.0s",
+            automargin=True,
+        ),
         legend=dict(
             orientation="h",
+            yref="container",
             yanchor="bottom",
-            y=-0.28,
+            y=8 / fig_height,
             xanchor="center",
             x=0.5,
             font=dict(size=11),
+            bgcolor="rgba(255,255,255,0.95)",
         ),
     )
 
@@ -627,11 +745,27 @@ def main():
     # ------------------------------------------------------------------
     map_col, chart_col = st.columns([3, 2])
     with map_col:
-        components.html(folium_map_html, height=500)
-        if not missing.empty:
+        view_mode = st.radio(
+            "View",
+            options=["Map", "Treemap"],
+            index=0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="map_view_mode",
+        )
+        if view_mode == "Map":
+            components.html(folium_map_html, height=500)
+            if not missing.empty:
+                st.caption(
+                    f"Excluded from map (no coordinates on file): "
+                    f"{', '.join(sorted(missing['country'].dropna().unique()))}"
+                )
+        else:
+            st.plotly_chart(treemap_fig, use_container_width=True)
             st.caption(
-                f"Excluded from map (no coordinates on file): "
-                f"{', '.join(sorted(missing['country'].dropna().unique()))}"
+                f"Rectangles sized by import value ({basis_label}); "
+                f"colour shows year-over-year change ({prior_yr} → {latest_yr}). "
+                "Grey = no prior-year data."
             )
     with chart_col:
         st.plotly_chart(bar_fig, use_container_width=True)
@@ -658,31 +792,64 @@ def main():
         breakdown_df["share"] = (
             breakdown_df["value_cad"] / total if total > 0 else 0.0
         )
+
+        # Persistent text search — survives year/basis changes since the
+        # widget keeps its value via Streamlit's session storage.
+        search = st.text_input(
+            "Filter countries",
+            key="origin_search",
+            placeholder="Type a country name (e.g. 'norw')",
+        ).strip()
+        if search:
+            s = search.lower()
+            mask = (
+                breakdown_df["country_name"].fillna("").str.lower().str.contains(s, regex=False)
+                | breakdown_df["country"].fillna("").str.lower().str.contains(s, regex=False)
+            )
+            breakdown_df = breakdown_df[mask]
+
+        breakdown_df = breakdown_df.reset_index(drop=True)
         breakdown_display = breakdown_df[
             ["flag", "country_name", "value_cad", "share"]
-        ].reset_index(drop=True)
+        ]
 
-        selection = st.dataframe(
-            breakdown_display,
-            hide_index=True,
-            use_container_width=True,
-            height=420,
-            column_config={
-                "flag": st.column_config.ImageColumn(label="", width="small"),
-                "country_name": st.column_config.TextColumn(label="Country"),
-                "value_cad": st.column_config.NumberColumn(
-                    label=f"Value ({basis_label})", format="dollar"
-                ),
-                "share": st.column_config.NumberColumn(label="Share", format="percent"),
-            },
-            on_select="rerun",
-            selection_mode="single-row",
-            key="origin_table",
-        )
+        if breakdown_df.empty:
+            st.info(
+                f"No countries match '{search}' for the current filter."
+                if search else "No data."
+            )
+            selected_rows: list[int] = []
+        else:
+            # Keying the dataframe on the current data scope (year set + search)
+            # forces selection state to reset when the data underneath changes —
+            # otherwise a stale row index would point to a different country
+            # (e.g. selecting Norway for 2016+2017 then switching to 2016 only
+            # would silently jump to whoever held that row index in the new
+            # data set).
+            year_key = "_".join(str(y) for y in sorted(sel_years))
+            selection_key = f"origin_table::{year_key}::{search}"
 
-        selected_rows = (
-            selection.selection.rows if selection and selection.selection else []
-        )
+            selection = st.dataframe(
+                breakdown_display,
+                hide_index=True,
+                use_container_width=True,
+                height=420,
+                column_config={
+                    "flag": st.column_config.ImageColumn(label="", width="small"),
+                    "country_name": st.column_config.TextColumn(label="Country"),
+                    "value_cad": st.column_config.NumberColumn(
+                        label=f"Value ({basis_label})", format="dollar"
+                    ),
+                    "share": st.column_config.NumberColumn(label="Share", format="percent"),
+                },
+                on_select="rerun",
+                selection_mode="single-row",
+                key=selection_key,
+            )
+            selected_rows = (
+                selection.selection.rows if selection and selection.selection else []
+            )
+
         if selected_rows:
             idx = selected_rows[0]
             iso = breakdown_df.iloc[idx]["country"]
@@ -734,7 +901,11 @@ def main():
             "line-height:1.4;margin-bottom:8px;'>"
             "Transitions where imports moved by ≥50% <b>and</b> ≥CAD $1M, "
             "or where a supplier started/stopped. Sorted chronologically."
-            "</div>",
+            "</div>"
+            # Invisible spacer matching the height of the breakdown column's
+            # "Filter countries" text input (label + input + Streamlit's
+            # built-in vertical padding) so both tables start at the same y.
+            "<div style='height:78px;' aria-hidden='true'></div>",
             unsafe_allow_html=True,
         )
         if insights.empty:
@@ -744,6 +915,77 @@ def main():
             )
         else:
             st.markdown(_render_yoy_table(insights), unsafe_allow_html=True)
+
+    st.markdown(
+        "<hr style='margin-top:32px;margin-bottom:6px;border:none;"
+        "border-top:1px solid #eee;'>"
+        "<div style='text-align:right;color:#888;font-size:11px;"
+        "padding-bottom:16px;'>"
+        "Version 1.0 · Developed by Rami F. · Data extracted 5 May 2026"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _build_treemap(
+    rows: pd.DataFrame,
+    basis_label: str,
+    prior_yr: int,
+    latest_yr: int,
+) -> go.Figure:
+    """Stock-market-style treemap: every origin country a rectangle sized by
+    import value (in the current selection), coloured by year-over-year
+    percentage change (red ↘ ··· grey 0% ··· green ↗)."""
+    fig = go.Figure()
+    if rows.empty:
+        return fig
+
+    yoy_color = rows["yoy_pct"].fillna(0.0).clip(-100, 100)
+    customdata = rows[["value_cad", "yoy_pct"]].copy()
+    customdata["yoy_display"] = customdata["yoy_pct"].apply(
+        lambda v: "n/a" if pd.isna(v) else f"{v:+.1f}%"
+    )
+
+    fig.add_trace(
+        go.Treemap(
+            labels=rows["country_name"],
+            parents=[""] * len(rows),
+            values=rows["value_cad"],
+            customdata=customdata.to_numpy(),
+            marker=dict(
+                colors=yoy_color,
+                colorscale=[
+                    [0.0, "#c0392b"],   # ≤ −100 % (clamped): deep red
+                    [0.5, "#e8e8e8"],   # 0 %: neutral grey
+                    [1.0, "#1b8a5a"],   # ≥ +100 % (clamped): deep green
+                ],
+                cmin=-100,
+                cmid=0,
+                cmax=100,
+                line=dict(color="white", width=1),
+                colorbar=dict(
+                    title=dict(text="YoY", font=dict(size=11)),
+                    ticksuffix="%",
+                    thickness=12,
+                    len=0.7,
+                    x=1.0,
+                ),
+            ),
+            textinfo="label",
+            textfont=dict(size=13, color="#111"),
+            hovertemplate=(
+                "<b>%{label}</b><br>"
+                f"Value ({basis_label}): $%{{customdata[0]:,.0f}}<br>"
+                f"YoY ({prior_yr} → {latest_yr}): %{{customdata[2]}}"
+                "<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        height=500,
+        margin=dict(l=0, r=0, t=10, b=0),
+    )
+    return fig
 
 
 def _flag_marker_html(iso2: str, size: int, *, ring_color: str = "white", ring_width: int = 2) -> str:
