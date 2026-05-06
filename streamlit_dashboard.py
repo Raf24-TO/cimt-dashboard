@@ -217,6 +217,21 @@ def main():
         .main .block-container {
             padding-bottom: 0 !important;
         }
+        /* 13" laptop tweaks — tighten vertical rhythm so the dashboard fits
+           in a single screen without aggressive scrolling. */
+        @media (max-height: 850px) {
+            section.main > div.block-container,
+            [data-testid="stMain"] > div.block-container,
+            .main .block-container {
+                padding-top: 1rem !important;
+            }
+            h1 { font-size: 1.6rem !important; line-height: 1.2 !important; }
+            h2 { font-size: 1.2rem !important; }
+            h3 { font-size: 1.05rem !important; }
+            [data-testid="stMetricValue"] { font-size: 1.4rem !important; }
+            [data-testid="stMetricLabel"] { font-size: 0.8rem !important; }
+            [data-testid="stCaptionContainer"] { font-size: 0.78rem !important; }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -519,13 +534,13 @@ def main():
     # ------------------------------------------------------------------
     # Headline metrics
     # ------------------------------------------------------------------
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric(f"Total imports ({basis_label})", fmt_cad(total))
     c2.metric("Origin countries", f"{(agg['value_cad'] > 0).sum():,}")
     c3.metric("Year", year_label)
-    c4.metric("HS codes selected", f"{len(sel_hs)}")
 
-    # Show selected HS code descriptions
+    # Show selected HS code descriptions (count surfaced in the expander
+    # label since the headline metric row was reduced from 4 → 3 cells).
     if sel_hs:
         with st.expander(f"Selected HS codes ({len(sel_hs)})"):
             for c in sel_hs:
@@ -707,7 +722,7 @@ def main():
     n_traces = len(bar_fig.data)
     legend_rows = max(1, math.ceil(n_traces / 3))
     legend_px = 30 + legend_rows * 22
-    plot_px = 460
+    plot_px = 380
     fig_height = plot_px + legend_px
 
     bar_fig.update_layout(
@@ -754,7 +769,7 @@ def main():
             key="map_view_mode",
         )
         if view_mode == "Map":
-            components.html(folium_map_html, height=500)
+            components.html(folium_map_html, height=420)
             if not missing.empty:
                 st.caption(
                     f"Excluded from map (no coordinates on file): "
@@ -833,7 +848,7 @@ def main():
                 breakdown_display,
                 hide_index=True,
                 use_container_width=True,
-                height=420,
+                height=360,
                 column_config={
                     "flag": st.column_config.ImageColumn(label="", width="small"),
                     "country_name": st.column_config.TextColumn(label="Country"),
@@ -880,7 +895,7 @@ def main():
                 hs_breakdown[["hs6", "hs_description", "value_cad", "share"]],
                 hide_index=True,
                 use_container_width=True,
-                height=320,
+                height=280,
                 column_config={
                     "hs6": st.column_config.TextColumn(label="HS-6", width="small"),
                     "hs_description": st.column_config.TextColumn(label="Description"),
@@ -982,7 +997,7 @@ def _build_treemap(
         )
     )
     fig.update_layout(
-        height=500,
+        height=420,
         margin=dict(l=0, r=0, t=10, b=0),
     )
     return fig
