@@ -492,17 +492,12 @@ def main():
     folium_map_html = _build_folium_map(map_df, total)
 
     # ------------------------------------------------------------------
-    # Stacked bar chart: per-year imports across the full year range,
-    # top 5 origin countries + "Others". Independent of the year filter.
+    # Stacked bar chart: per-year imports across the full year range.
+    # Each year shows its OWN top 5 origins plus an "Others" bucket, so the
+    # set of named countries can shift between years.
     # ------------------------------------------------------------------
     bar_view = apply_deflation(
         df[df["hs6"].isin(sel_hs) & (df["country"] != "CA")], cad_basis
-    )
-    top_origins = (
-        bar_view.groupby("country", as_index=False)["value_cad"]
-        .sum()
-        .nlargest(5, "value_cad")["country"]
-        .tolist()
     )
     country_label = (
         bar_view.dropna(subset=["country_name"])
@@ -510,44 +505,78 @@ def main():
         .set_index("country")["country_name"]
         .to_dict()
     )
-    bar_view = bar_view.assign(
-        bucket=lambda d: d["country"].where(d["country"].isin(top_origins), "Others")
+
+    # Rank countries within each year; rank > 5 collapses into "Others".
+    yearly_country = (
+        bar_view.dropna(subset=["year"])
+        .groupby(["year", "country"], as_index=False, dropna=False)["value_cad"]
+        .sum()
     )
-    yearly = bar_view.groupby(["year", "bucket"], as_index=False)["value_cad"].sum()
+    yearly_country["rank"] = yearly_country.groupby("year")["value_cad"].rank(
+        method="first", ascending=False
+    )
+    yearly_country["bucket"] = yearly_country["country"].where(
+        yearly_country["rank"] <= 5, "Others"
+    )
+    yearly = yearly_country.groupby(
+        ["year", "bucket"], as_index=False
+    )["value_cad"].sum()
     year_totals = yearly.groupby("year")["value_cad"].sum().to_dict()
     yearly["pct"] = yearly.apply(
         lambda r: (r["value_cad"] / year_totals[r["year"]] * 100.0)
         if year_totals.get(r["year"], 0) else 0.0,
         axis=1,
     )
-    palette = ["#F53C23", "#A59669", "#8282EB", "#0AB96E", "#FFB300"]
+
+    # Union of countries that ever appeared in any year's top 5,
+    # ordered by cumulative value across the full window.
+    top5_union = (
+        yearly_country[yearly_country["rank"] <= 5]
+        .groupby("country")["value_cad"]
+        .sum()
+        .sort_values(ascending=False)
+        .index.tolist()
+    )
+
+    # Stable colour per country, drawn from the brand palette extended with
+    # darker variants for the long-tail countries that may appear in only one
+    # or two years.
+    palette_extended = [
+        "#F53C23", "#A59669", "#8282EB", "#0AB96E", "#FFB300", "#1A98AF",
+        "#B22A18", "#6F6346", "#4F4FCC", "#066E42", "#C28A00", "#107488",
+    ]
+    country_colors = {
+        c: palette_extended[i % len(palette_extended)]
+        for i, c in enumerate(top5_union)
+    }
     others_color = "#9AA0A6"
 
     bar_fig = go.Figure()
-    for i, bucket in enumerate(top_origins):
-        sub = yearly[yearly["bucket"] == bucket].sort_values("year")
-        name = country_label.get(bucket, bucket)
+    for country in top5_union:
+        sub = yearly[yearly["bucket"] == country].sort_values("year")
+        if sub.empty or sub["value_cad"].sum() == 0:
+            continue
+        name = country_label.get(country, country)
         bar_fig.add_trace(
             go.Bar(
                 name=name,
                 x=sub["year"].astype(int),
                 y=sub["value_cad"],
                 customdata=sub["pct"],
-                marker_color=palette[i % len(palette)],
+                marker_color=country_colors[country],
                 hovertemplate=(
                     f"<b>{name}</b><br>$%{{y:,.0f}}<br>"
                     "%{customdata:.1f}% of year<extra></extra>"
                 ),
             )
         )
+
     others_sub = yearly[yearly["bucket"] == "Others"].sort_values("year").copy()
     if not others_sub.empty:
-        # Per-year count of distinct "Others" countries that actually shipped
-        # (value > 0 in that year). Drives the (n) shown on hover.
         others_per_year = (
-            bar_view[
-                ~bar_view["country"].isin(top_origins)
-                & (bar_view["value_cad"] > 0)
+            yearly_country.loc[
+                (yearly_country["rank"] > 5)
+                & (yearly_country["value_cad"] > 0)
             ]
             .groupby("year")["country"]
             .nunique()
@@ -574,7 +603,10 @@ def main():
         height=480,
         margin=dict(l=10, r=10, t=30, b=30),
         title=dict(
-            text=f"Annual imports — top 5 origins + others ({basis_label})",
+            text=(
+                "Annual imports — each year's top 5 origins + Others "
+                f"({basis_label})"
+            ),
             x=0,
             font=dict(size=14),
         ),
