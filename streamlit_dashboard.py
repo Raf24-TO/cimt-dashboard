@@ -520,9 +520,6 @@ def main():
         if year_totals.get(r["year"], 0) else 0.0,
         axis=1,
     )
-    others_n = bar_view.loc[
-        ~bar_view["country"].isin(top_origins), "country"
-    ].dropna().nunique()
     palette = ["#F53C23", "#A59669", "#8282EB", "#0AB96E", "#FFB300"]
     others_color = "#9AA0A6"
 
@@ -543,19 +540,32 @@ def main():
                 ),
             )
         )
-    others_sub = yearly[yearly["bucket"] == "Others"].sort_values("year")
+    others_sub = yearly[yearly["bucket"] == "Others"].sort_values("year").copy()
     if not others_sub.empty:
-        others_name = f"Others ({others_n})"
+        # Per-year count of distinct "Others" countries that actually shipped
+        # (value > 0 in that year). Drives the (n) shown on hover.
+        others_per_year = (
+            bar_view[
+                ~bar_view["country"].isin(top_origins)
+                & (bar_view["value_cad"] > 0)
+            ]
+            .groupby("year")["country"]
+            .nunique()
+            .to_dict()
+        )
+        others_sub["n"] = (
+            others_sub["year"].map(others_per_year).fillna(0).astype(int)
+        )
         bar_fig.add_trace(
             go.Bar(
-                name=others_name,
+                name="Others",
                 x=others_sub["year"].astype(int),
                 y=others_sub["value_cad"],
-                customdata=others_sub["pct"],
+                customdata=others_sub[["pct", "n"]].to_numpy(),
                 marker_color=others_color,
                 hovertemplate=(
-                    f"<b>{others_name}</b><br>$%{{y:,.0f}}<br>"
-                    "%{customdata:.1f}% of year<extra></extra>"
+                    "<b>Others (%{customdata[1]})</b><br>$%{y:,.0f}<br>"
+                    "%{customdata[0]:.1f}% of year<extra></extra>"
                 ),
             )
         )
