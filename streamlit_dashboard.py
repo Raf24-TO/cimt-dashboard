@@ -165,6 +165,34 @@ def main():
         layout="wide",
     )
 
+    # Allow long filter labels (Category / HS-4 / HS-6) to wrap onto multiple
+    # lines instead of being truncated with ellipsis. BaseWeb's default is
+    # white-space: nowrap on dropdown options.
+    st.markdown(
+        """
+        <style>
+        ul[role="listbox"] li,
+        [data-baseweb="popover"] [role="option"],
+        [data-baseweb="menu"] [role="option"] {
+            white-space: normal !important;
+            word-break: break-word !important;
+            line-height: 1.35 !important;
+            height: auto !important;
+            min-height: 36px !important;
+            padding-top: 6px !important;
+            padding-bottom: 6px !important;
+        }
+        /* Currently-selected value in a selectbox */
+        [data-baseweb="select"] [data-baseweb="tag"],
+        [data-baseweb="select"] div[role="combobox"] > div {
+            white-space: normal !important;
+            line-height: 1.3 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     title_col, basis_col = st.columns([4, 1])
     with title_col:
         st.title("Strengthening Canada's Grid Equipment Supply Chain")
@@ -281,7 +309,7 @@ def main():
             sel_hs4 = st.selectbox(
                 "HS-4 (heading)",
                 options=[ALL] + hs4_codes,
-                format_func=lambda c: c if c == ALL else f"{c} — {hs4_desc.get(c, '')[:90]}",
+                format_func=lambda c: c if c == ALL else f"{c} — {hs4_desc.get(c, '')}",
             )
 
         # HS-6 options scoped by HS-4 selection.
@@ -294,7 +322,7 @@ def main():
             "HS-6 code",
             options=[ALL] + visible_hs6,
             default=[ALL],
-            format_func=lambda c: c if c == ALL else f"{c} — {hs6_desc.get(c, '')[:90]}",
+            format_func=lambda c: c if c == ALL else f"{c} — {hs6_desc.get(c, '')}",
         )
         # 'All' (or empty) expands to everything visible.
         if ALL in sel_hs_raw or not sel_hs_raw:
