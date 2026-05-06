@@ -166,27 +166,39 @@ def main():
     )
 
     # Allow long filter labels (Category / HS-4 / HS-6) to wrap onto multiple
-    # lines instead of being truncated with ellipsis. BaseWeb's default is
-    # white-space: nowrap on dropdown options.
+    # lines instead of being truncated with ellipsis. BaseWeb's option items
+    # nest the text in inner <div>s with their own white-space/overflow rules,
+    # so we have to override the descendants too.
     st.markdown(
         """
         <style>
+        [data-baseweb="popover"] li[role="option"],
+        [data-baseweb="popover"] li[role="option"] *,
         ul[role="listbox"] li,
-        [data-baseweb="popover"] [role="option"],
-        [data-baseweb="menu"] [role="option"] {
+        ul[role="listbox"] li * {
             white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
             word-break: break-word !important;
             line-height: 1.35 !important;
             height: auto !important;
-            min-height: 36px !important;
+            max-width: none !important;
+        }
+        [data-baseweb="popover"] li[role="option"] {
             padding-top: 6px !important;
             padding-bottom: 6px !important;
+            min-height: 36px !important;
         }
         /* Currently-selected value in a selectbox */
         [data-baseweb="select"] [data-baseweb="tag"],
-        [data-baseweb="select"] div[role="combobox"] > div {
+        [data-baseweb="select"] div[role="combobox"],
+        [data-baseweb="select"] div[role="combobox"] > div,
+        [data-baseweb="select"] div[role="combobox"] * {
             white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
             line-height: 1.3 !important;
+            height: auto !important;
         }
         </style>
         """,
