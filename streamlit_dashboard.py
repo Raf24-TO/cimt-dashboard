@@ -458,6 +458,15 @@ def main():
         bucket=lambda d: d["country"].where(d["country"].isin(top_origins), "Others")
     )
     yearly = bar_view.groupby(["year", "bucket"], as_index=False)["value_cad"].sum()
+    year_totals = yearly.groupby("year")["value_cad"].sum().to_dict()
+    yearly["pct"] = yearly.apply(
+        lambda r: (r["value_cad"] / year_totals[r["year"]] * 100.0)
+        if year_totals.get(r["year"], 0) else 0.0,
+        axis=1,
+    )
+    others_n = bar_view.loc[
+        ~bar_view["country"].isin(top_origins), "country"
+    ].dropna().nunique()
     palette = ["#F53C23", "#A59669", "#8282EB", "#0AB96E", "#FFB300"]
     others_color = "#9AA0A6"
 
@@ -470,19 +479,28 @@ def main():
                 name=name,
                 x=sub["year"].astype(int),
                 y=sub["value_cad"],
+                customdata=sub["pct"],
                 marker_color=palette[i % len(palette)],
-                hovertemplate=f"<b>{name}</b><br>%{{x}}: $%{{y:,.0f}}<extra></extra>",
+                hovertemplate=(
+                    f"<b>{name}</b><br>$%{{y:,.0f}}<br>"
+                    "%{customdata:.1f}% of year<extra></extra>"
+                ),
             )
         )
     others_sub = yearly[yearly["bucket"] == "Others"].sort_values("year")
     if not others_sub.empty:
+        others_name = f"Others ({others_n})"
         bar_fig.add_trace(
             go.Bar(
-                name="Others",
+                name=others_name,
                 x=others_sub["year"].astype(int),
                 y=others_sub["value_cad"],
+                customdata=others_sub["pct"],
                 marker_color=others_color,
-                hovertemplate="<b>Others</b><br>%{x}: $%{y:,.0f}<extra></extra>",
+                hovertemplate=(
+                    f"<b>{others_name}</b><br>$%{{y:,.0f}}<br>"
+                    "%{customdata:.1f}% of year<extra></extra>"
+                ),
             )
         )
     bar_fig.update_layout(
