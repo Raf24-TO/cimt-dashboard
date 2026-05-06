@@ -27,6 +27,7 @@ HS4_PRIORITY_FILE = ROOT / "hs_priority_4"
 HS6_PRIORITY_FILE = ROOT / "hs_priority_6.md"
 CATEGORIZATION_FILE = ROOT / "categorization.md"
 LOGO_PATH = ROOT / "assets" / "transition_accelerator.png"
+CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 
 CANADA_LAT, CANADA_LON = 56.130, -106.347
 ALL = "All"
@@ -88,6 +89,14 @@ def load_data() -> pd.DataFrame:
 @st.cache_data
 def load_coords() -> pd.DataFrame:
     return pd.read_csv(COORDS_CSV)
+
+
+@st.cache_data
+def load_canada_geojson() -> dict | None:
+    if not CANADA_GEOJSON.exists():
+        return None
+    import json
+    return json.loads(CANADA_GEOJSON.read_text(encoding="utf-8"))
 
 
 @st.cache_data
@@ -336,6 +345,13 @@ def main():
             default=[ALL],
             format_func=lambda c: c if c == ALL else f"{c} — {hs6_desc.get(c, '')}",
         )
+        st.caption(
+            "**HS** (Harmonized System) is the 6-digit international product "
+            "code used in customs declarations. It overlaps in scope with "
+            "**NAICS / NAPCS** (the StatCan industry / product classifications) "
+            "but is organized by *product type* rather than *industry*, so "
+            "exact one-to-one mapping isn't possible."
+        )
         # 'All' (or empty) expands to everything visible.
         if ALL in sel_hs_raw or not sel_hs_raw:
             sel_hs = visible_hs6
@@ -581,12 +597,16 @@ def main():
     # ------------------------------------------------------------------
     # Bottom row: origin breakdown (left) + YoY insights (right)
     # ------------------------------------------------------------------
-    breakdown_col, yoy_col = st.columns(2)
+    breakdown_col, yoy_col = st.columns(2, gap="large", vertical_alignment="top")
     with breakdown_col:
         st.subheader("Origin breakdown")
-        st.caption(
+        st.markdown(
+            "<div style='min-height:46px;color:#666;font-size:13px;"
+            "line-height:1.4;margin-bottom:8px;'>"
             f"All origin countries for {year_label} (sorted by value, {basis_label}). "
             "Click a row to see that country's HS-6 breakdown."
+            "</div>",
+            unsafe_allow_html=True,
         )
 
         breakdown_df = plotted[["country", "country_name", "value_cad"]].copy()
@@ -665,18 +685,22 @@ def main():
             )
 
     with yoy_col:
-        st.subheader("Notable YoY changes")
+        st.subheader("Notable year-over-year changes")
         insights = _compute_yoy_insights(bar_view, country_label)
+        st.markdown(
+            "<div style='min-height:46px;color:#666;font-size:13px;"
+            "line-height:1.4;margin-bottom:8px;'>"
+            "Transitions where imports moved by ≥50% <b>and</b> ≥CAD $1M, "
+            "or where a supplier started/stopped. Sorted by absolute $ change."
+            "</div>",
+            unsafe_allow_html=True,
+        )
         if insights.empty:
             st.info(
-                "No standout YoY changes (≥50% and ≥CAD $1M) for the current "
+                "No standout year-over-year changes (≥50% and ≥CAD $1M) for the current "
                 "HS selection. Try widening the HS filter."
             )
         else:
-            st.caption(
-                "Transitions where imports moved by ≥50% **and** ≥CAD $1M, "
-                "or where a supplier started/stopped. Sorted by absolute $ change."
-            )
             st.markdown(_render_yoy_table(insights), unsafe_allow_html=True)
 
 
@@ -696,9 +720,8 @@ def _flag_marker_html(iso2: str, size: int, *, ring_color: str = "white", ring_w
 
 
 def _build_folium_map(map_df: pd.DataFrame, total: float) -> str:
-    """Return a self-contained HTML string with a Folium flow map: Canada hub
-    (CA flag), per-origin circular flag markers sized by value, and
-    blue lines connecting each origin to Canada."""
+    """Return a self-contained HTML string with a Folium map: Canada shaded
+    as the destination, plus per-origin circular flag markers sized by value."""
     m = folium.Map(
         location=[20, -30],
         zoom_start=2,
@@ -708,13 +731,24 @@ def _build_folium_map(map_df: pd.DataFrame, total: float) -> str:
         min_zoom=2,
     )
 
-    # Connecting lines first so flag markers render on top.
-    for _, row in map_df.iterrows():
-        folium.PolyLine(
-            locations=[(row["lat"], row["lon"]), (CANADA_LAT, CANADA_LON)],
-            color="#145ab4",
-            weight=1,
-            opacity=0.35,
+    # Canada shaded as the destination.
+    canada_geo = load_canada_geojson()
+    if canada_geo is not None:
+        canada_tooltip = folium.Tooltip(
+            f"<div style='font-family:system-ui,sans-serif;font-size:13px;'>"
+            f"<b>Canada (destination)</b><br>Total: {fmt_cad(total)}</div>",
+            sticky=False,
+        )
+        folium.GeoJson(
+            canada_geo,
+            style_function=lambda _f: {
+                "fillColor": "#F53C23",
+                "color": "#F53C23",
+                "weight": 1,
+                "fillOpacity": 0.55,
+            },
+            highlight_function=lambda _f: {"fillOpacity": 0.7},
+            tooltip=canada_tooltip,
         ).add_to(m)
 
     # Origin flag markers, sized by value.
@@ -739,23 +773,6 @@ def _build_folium_map(map_df: pd.DataFrame, total: float) -> str:
             ),
             tooltip=folium.Tooltip(tooltip, sticky=False),
         ).add_to(m)
-
-    # Canada hub — bigger flag.
-    canada_size = 56
-    canada_tooltip = (
-        f"<div style='font-family:system-ui,sans-serif;font-size:13px;'>"
-        f"<b>Canada (destination)</b><br>Total: {fmt_cad(total)}</div>"
-    )
-    folium.Marker(
-        location=[CANADA_LAT, CANADA_LON],
-        icon=folium.DivIcon(
-            html=_flag_marker_html("CA", canada_size, ring_color="#fff", ring_width=3),
-            icon_size=(canada_size, canada_size),
-            icon_anchor=(canada_size // 2, canada_size // 2),
-        ),
-        tooltip=folium.Tooltip(canada_tooltip, sticky=False),
-        z_index_offset=1000,
-    ).add_to(m)
 
     return m.get_root().render()
 
