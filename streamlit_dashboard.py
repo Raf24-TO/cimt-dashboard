@@ -691,7 +691,7 @@ def main():
             "<div style='min-height:46px;color:#666;font-size:13px;"
             "line-height:1.4;margin-bottom:8px;'>"
             "Transitions where imports moved by ≥50% <b>and</b> ≥CAD $1M, "
-            "or where a supplier started/stopped. Sorted by absolute $ change."
+            "or where a supplier started/stopped. Sorted chronologically."
             "</div>",
             unsafe_allow_html=True,
         )
@@ -827,6 +827,7 @@ def _compute_yoy_insights(
                 "country": country,
                 "country_name": country_label.get(country, country),
                 "transition": f"{prev_y} → {curr_y}",
+                "curr_y": curr_y,
                 "prev_value": prev_v,
                 "curr_value": curr_v,
                 "delta_cad": delta,
@@ -836,13 +837,32 @@ def _compute_yoy_insights(
     out = pd.DataFrame(records)
     if out.empty:
         return out
-    out = out.assign(_abs=out["delta_cad"].abs()).sort_values("_abs", ascending=False).head(top_n)
-    return out.drop(columns="_abs")
+    # Pick the top-N by absolute $ movement, then display them chronologically
+    # (newer transitions last; ties within a year by absolute movement).
+    out = (
+        out.assign(_abs=out["delta_cad"].abs())
+        .sort_values("_abs", ascending=False)
+        .head(top_n)
+        .sort_values(["curr_y", "_abs"], ascending=[False, False])
+        .drop(columns=["_abs", "curr_y"])
+    )
+    return out
 
 
 def _render_yoy_table(rows: pd.DataFrame) -> str:
     body = []
+    current_transition: str | None = None
     for _, r in rows.iterrows():
+        if r["transition"] != current_transition:
+            body.append(
+                "<tr style='background:#eef2f7;'>"
+                "<td colspan='6' style='padding:8px 12px;text-align:center;"
+                "font-weight:600;color:#1f3a68;letter-spacing:0.3px;'>"
+                f"{r['transition']}"
+                "</td></tr>"
+            )
+            current_transition = r["transition"]
+
         iso = str(r.get("country") or "").lower()
         flag = (
             f'<img src="https://flagcdn.com/24x18/{iso}.png" '
@@ -867,7 +887,6 @@ def _render_yoy_table(rows: pd.DataFrame) -> str:
         body.append(
             "<tr>"
             f"<td style='padding:5px 12px;'>{flag}{name}</td>"
-            f"<td style='padding:5px 12px;'>{r['transition']}</td>"
             f"<td style='padding:5px 12px;text-align:right;color:#666;'>${r['prev_value']:,.0f}</td>"
             f"<td style='padding:5px 12px;text-align:right;'>${r['curr_value']:,.0f}</td>"
             f"<td style='padding:5px 12px;text-align:right;color:{color};font-weight:500;'>{delta_str}</td>"
@@ -880,7 +899,6 @@ def _render_yoy_table(rows: pd.DataFrame) -> str:
         "<table style='border-collapse:collapse;font-size:13px;width:100%;'>"
         "<thead><tr style='border-bottom:1px solid #ccc;background:#f5f5f5;'>"
         "<th style='text-align:left;padding:6px 12px;'>Country</th>"
-        "<th style='text-align:left;padding:6px 12px;'>Transition</th>"
         "<th style='text-align:right;padding:6px 12px;'>From</th>"
         "<th style='text-align:right;padding:6px 12px;'>To</th>"
         "<th style='text-align:right;padding:6px 12px;'>Δ CAD</th>"
