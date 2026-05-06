@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Local virtualenvs
+.venv/
+venv/
+env/
+
+# StatCan source dumps — large + regeneratable via extract_cimt_trade.py
+cimt_cache/
+
+# Heavy intermediate outputs — only the slim parquet is committed
+cimt_output/cimt_trade_long.csv
+cimt_output/cimt_trade_by_country_pivot.csv
+cimt_output/cimt_trade_annual_pivot.csv
+cimt_output/cimt_trade_summary_by_hs6.csv
+cimt_output/cimt_trade_slim.csv.gz
+cimt_output/extraction_log.txt
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
