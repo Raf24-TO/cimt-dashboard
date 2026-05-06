@@ -545,12 +545,84 @@ def main():
     with breakdown_col:
         st.subheader("Origin breakdown")
         st.caption(
-            f"All origin countries for {year_label} (sorted by value, {basis_label})."
+            f"All origin countries for {year_label} (sorted by value, {basis_label}). "
+            "Click a row to see that country's HS-6 breakdown."
         )
-        st.markdown(
-            _render_origin_table(plotted, total),
-            unsafe_allow_html=True,
+
+        breakdown_df = plotted[["country", "country_name", "value_cad"]].copy()
+        breakdown_df["flag"] = (
+            "https://flagcdn.com/24x18/" + breakdown_df["country"].str.lower() + ".png"
         )
+        breakdown_df["share"] = (
+            breakdown_df["value_cad"] / total if total > 0 else 0.0
+        )
+        breakdown_display = breakdown_df[
+            ["flag", "country_name", "value_cad", "share"]
+        ].reset_index(drop=True)
+
+        selection = st.dataframe(
+            breakdown_display,
+            hide_index=True,
+            use_container_width=True,
+            height=420,
+            column_config={
+                "flag": st.column_config.ImageColumn(label="", width="small"),
+                "country_name": st.column_config.TextColumn(label="Country"),
+                "value_cad": st.column_config.NumberColumn(
+                    label=f"Value ({basis_label})", format="dollar"
+                ),
+                "share": st.column_config.NumberColumn(label="Share", format="percent"),
+            },
+            on_select="rerun",
+            selection_mode="single-row",
+            key="origin_table",
+        )
+
+        selected_rows = (
+            selection.selection.rows if selection and selection.selection else []
+        )
+        if selected_rows:
+            idx = selected_rows[0]
+            iso = breakdown_df.iloc[idx]["country"]
+            cname = breakdown_df.iloc[idx]["country_name"] or iso
+
+            country_view = view[view["country"] == iso]
+            hs_breakdown = (
+                country_view.groupby(
+                    ["hs6", "hs_description"], as_index=False, dropna=False
+                )["value_cad"]
+                .sum()
+                .sort_values("value_cad", ascending=False)
+            )
+            country_total = float(hs_breakdown["value_cad"].sum())
+            hs_breakdown["share"] = (
+                hs_breakdown["value_cad"] / country_total
+                if country_total > 0 else 0.0
+            )
+
+            st.markdown(
+                f"**HS-6 breakdown — {cname}** &nbsp;"
+                f"<span style='color:#666;font-size:13px;'>"
+                f"Total {fmt_cad(country_total)} ({basis_label}) "
+                f"across {len(hs_breakdown)} HS-6 code(s) in current filter</span>",
+                unsafe_allow_html=True,
+            )
+            st.dataframe(
+                hs_breakdown[["hs6", "hs_description", "value_cad", "share"]],
+                hide_index=True,
+                use_container_width=True,
+                height=320,
+                column_config={
+                    "hs6": st.column_config.TextColumn(label="HS-6", width="small"),
+                    "hs_description": st.column_config.TextColumn(label="Description"),
+                    "value_cad": st.column_config.NumberColumn(
+                        label=f"Value ({basis_label})", format="dollar"
+                    ),
+                    "share": st.column_config.NumberColumn(
+                        label="Share of country", format="percent"
+                    ),
+                },
+            )
 
     with yoy_col:
         st.subheader("Notable YoY changes")
@@ -757,42 +829,6 @@ def _render_yoy_table(rows: pd.DataFrame) -> str:
         "<th style='text-align:right;padding:6px 12px;'>Δ CAD</th>"
         "<th style='text-align:right;padding:6px 12px;'>Δ %</th>"
         "<th style='text-align:left;padding:6px 12px;'>Note</th>"
-        "</tr></thead>"
-        f"<tbody>{''.join(body)}</tbody>"
-        "</table></div>"
-    )
-
-
-def _render_origin_table(rows: pd.DataFrame, total: float) -> str:
-    if rows.empty:
-        return "<p><em>No data.</em></p>"
-    body = []
-    for _, r in rows.iterrows():
-        iso = str(r.get("country") or "").lower()
-        flag = (
-            f'<img src="https://flagcdn.com/24x18/{iso}.png" '
-            f'style="vertical-align:middle;margin-right:8px;'
-            f'box-shadow:0 0 1px rgba(0,0,0,0.4);" alt="" '
-            f'onerror="this.style.visibility=\'hidden\'">'
-            if iso else ""
-        )
-        name = r["country_name"] if pd.notna(r.get("country_name")) else r.get("country", "")
-        value = f"${r['value_cad']:,.0f}"
-        share = f"{r['value_cad'] / total * 100:.2f}%" if total > 0 else "—"
-        body.append(
-            "<tr>"
-            f"<td style='padding:4px 12px;'>{flag}{name}</td>"
-            f"<td style='padding:4px 12px;text-align:right;'>{value}</td>"
-            f"<td style='padding:4px 12px;text-align:right;color:#555;'>{share}</td>"
-            "</tr>"
-        )
-    return (
-        "<div style='max-width:560px;'>"
-        "<table style='border-collapse:collapse;font-size:14px;width:100%;'>"
-        "<thead><tr style='border-bottom:1px solid #ccc;'>"
-        "<th style='text-align:left;padding:6px 12px;'>Country</th>"
-        "<th style='text-align:right;padding:6px 12px;'>Value (CAD)</th>"
-        "<th style='text-align:right;padding:6px 12px;'>Share</th>"
         "</tr></thead>"
         f"<tbody>{''.join(body)}</tbody>"
         "</table></div>"
