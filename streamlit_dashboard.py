@@ -1001,27 +1001,63 @@ def _render_main_view(
             )
 
     with yoy_col:
-        st.subheader("Notable year-over-year changes")
-        insights = _compute_yoy_insights(bar_view, country_label)
+        st.subheader("Notable changes")
+        years_in_view = sorted(int(y) for y in bar_view["year"].dropna().unique())
+        if len(years_in_view) >= 2:
+            first_y, last_y = years_in_view[0], years_in_view[-1]
+        else:
+            first_y, last_y = None, None
+        intro = (
+            (
+                f"Movements ≥50% <b>and</b> ≥CAD $1M between {first_y} and "
+                f"{last_y}, or suppliers that started/stopped. Expand below "
+                "for the year-by-year breakdown."
+            )
+            if first_y is not None
+            else (
+                "Movements ≥50% <b>and</b> ≥CAD $1M, or suppliers that "
+                "started/stopped."
+            )
+        )
         st.markdown(
             "<div style='min-height:46px;color:#666;font-size:13px;"
-            "line-height:1.4;margin-bottom:8px;'>"
-            "Transitions where imports moved by ≥50% <b>and</b> ≥CAD $1M, "
-            "or where a supplier started/stopped. Sorted chronologically."
-            "</div>"
+            f"line-height:1.4;margin-bottom:8px;'>{intro}</div>"
             # Invisible spacer matching the height of the breakdown column's
             # "Filter countries" text input (label + input + Streamlit's
             # built-in vertical padding) so both tables start at the same y.
             "<div style='height:78px;' aria-hidden='true'></div>",
             unsafe_allow_html=True,
         )
-        if insights.empty:
-            st.info(
-                "No standout year-over-year changes (≥50% and ≥CAD $1M) for the current "
-                "HS selection. Try widening the HS filter."
+
+        # Headline: change between the first and last available year.
+        if first_y is not None and last_y is not None and last_y > first_y:
+            headline = _compute_period_change(
+                bar_view, country_label, first_y, last_y
             )
-        else:
-            st.markdown(_render_yoy_table(insights), unsafe_allow_html=True)
+            if headline.empty:
+                st.info(
+                    f"No standout changes from {first_y} to {last_y} for the "
+                    "current HS selection."
+                )
+            else:
+                # Reuse the yearly renderer's transition banner (`2016 → 2025`)
+                # so the table has a clear visual anchor for the period.
+                st.markdown(
+                    _render_yoy_table(headline, show_transition_header=True),
+                    unsafe_allow_html=True,
+                )
+
+        # Yearly transitions tucked into an expander so the headline stays
+        # the dominant view; click to see the chronological breakdown.
+        with st.expander("Yearly transitions", expanded=False):
+            insights = _compute_yoy_insights(bar_view, country_label)
+            if insights.empty:
+                st.info(
+                    "No standout year-over-year changes (≥50% and ≥CAD $1M) "
+                    "for the current HS selection."
+                )
+            else:
+                st.markdown(_render_yoy_table(insights), unsafe_allow_html=True)
 
 
 
@@ -1318,6 +1354,74 @@ def _build_folium_map(map_df: pd.DataFrame, total: float) -> str:
     return m.get_root().render()
 
 
+def _compute_period_change(
+    view: pd.DataFrame,
+    country_label: dict,
+    prev_y: int,
+    curr_y: int,
+    min_change_pct: float = 50.0,
+    min_change_cad: float = 1_000_000.0,
+    top_n: int = 25,
+) -> pd.DataFrame:
+    """Per-country change between two specific years (e.g. first → last in the
+    window). Same significance thresholds as the year-over-year view."""
+    if view.empty:
+        return pd.DataFrame()
+    panel = (
+        view[view["year"].isin([prev_y, curr_y])]
+        .groupby(["country", "year"], as_index=False, dropna=False)["value_cad"]
+        .sum()
+        .pivot(index="country", columns="year", values="value_cad")
+        .fillna(0.0)
+    )
+    if prev_y not in panel.columns or curr_y not in panel.columns:
+        return pd.DataFrame()
+    records = []
+    for country in panel.index:
+        prev_v = float(panel.at[country, prev_y])
+        curr_v = float(panel.at[country, curr_y])
+        if prev_v == 0 and curr_v == 0:
+            continue
+        delta = curr_v - prev_v
+        if prev_v == 0 and curr_v >= min_change_cad:
+            tag, pct = "New supplier", float("inf")
+        elif curr_v == 0 and prev_v >= min_change_cad:
+            tag, pct = "Stopped supplying", -100.0
+        elif prev_v > 0:
+            pct = delta / prev_v * 100.0
+            if abs(delta) < min_change_cad or abs(pct) < min_change_pct:
+                continue
+            if pct >= 200:
+                tag = "Surge"
+            elif pct >= min_change_pct:
+                tag = "Sharp increase"
+            elif pct <= -75:
+                tag = "Collapse"
+            else:
+                tag = "Sharp decline"
+        else:
+            continue
+        records.append({
+            "country": country,
+            "country_name": country_label.get(country, country),
+            "transition": f"{prev_y} → {curr_y}",
+            "prev_value": prev_v,
+            "curr_value": curr_v,
+            "delta_cad": delta,
+            "delta_pct": pct,
+            "tag": tag,
+        })
+    out = pd.DataFrame(records)
+    if out.empty:
+        return out
+    return (
+        out.assign(_abs=out["delta_cad"].abs())
+        .sort_values("_abs", ascending=False)
+        .head(top_n)
+        .drop(columns="_abs")
+    )
+
+
 def _compute_yoy_insights(
     view: pd.DataFrame,
     country_label: dict,
@@ -1390,11 +1494,11 @@ def _compute_yoy_insights(
     return out
 
 
-def _render_yoy_table(rows: pd.DataFrame) -> str:
+def _render_yoy_table(rows: pd.DataFrame, *, show_transition_header: bool = True) -> str:
     body = []
     current_transition: str | None = None
     for _, r in rows.iterrows():
-        if r["transition"] != current_transition:
+        if show_transition_header and r["transition"] != current_transition:
             body.append(
                 "<tr style='background:#eef2f7;'>"
                 "<td colspan='6' style='padding:8px 12px;text-align:center;"
