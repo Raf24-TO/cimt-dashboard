@@ -72,7 +72,7 @@ import pandas as pd
 YEARS = list(range(2016, 2026))
 
 # Trade flows to pull. Options: "imports", "total_exports", "domestic_exports"
-FLOWS = ["imports"]
+FLOWS = ["imports", "domestic_exports"]
 
 # Priority HS codes are read from this file at run time. Prefix match — list
 # HS-6 for category-level, HS-8/HS-10 for finer resolution. One code per line;
@@ -230,6 +230,7 @@ def _filter_chunks(reader, hs_prefixes, flow, year):
 
 _CTY_LINE = re.compile(r"^([A-Z]{2})\s+\d+\s+\d{6}\s+\d{6}\s+(.+?)\s{3,}")
 _HS10_LINE = re.compile(r"^(\d{10})\s+(\d{6})\s+(\d{6})\s+(\S{1,5})\s+(.+?)\s{3,}")
+_HS8_LINE = re.compile(r"^(\d{8})\s+(\d{6})\s+(\d{6})\s+(\S{1,5})\s+(.+?)\s{3,}")
 
 
 def _load_country_names(zip_path: Path) -> dict[str, str]:
@@ -256,17 +257,29 @@ def _load_hs10_descriptions(zip_path: Path) -> dict[str, str]:
     """Read CIMT's bundled ODPF_1_HS10Desc.TXT → HS-10 code → English description.
     Codes appear multiple times with different validity periods; keep the one
     with the latest end period so retired codes don't shadow current ones."""
+    return _load_hs_descriptions(zip_path, "hs10desc.txt", _HS10_LINE)
+
+
+def _load_hs8_descriptions(zip_path: Path) -> dict[str, str]:
+    """Same as _load_hs10_descriptions but for HS-8 codes (used on the export
+    side, where CIMT's most granular Canadian classification is 8 digits)."""
+    return _load_hs_descriptions(zip_path, "hs8desc.txt", _HS8_LINE)
+
+
+def _load_hs_descriptions(zip_path: Path, file_suffix: str, line_re: re.Pattern) -> dict[str, str]:
+    """Generic loader for CIMT's HS description files (HS-8 or HS-10).
+    Shared because the two file formats are identical apart from code length."""
     desc: dict[str, str] = {}
     end_per: dict[str, str] = {}
     try:
         with zipfile.ZipFile(zip_path) as zf:
-            files = [n for n in zf.namelist() if n.lower().endswith("hs10desc.txt")]
+            files = [n for n in zf.namelist() if n.lower().endswith(file_suffix)]
             if not files:
                 return desc
             with zf.open(files[0]) as f:
                 for raw in f:
                     line = raw.decode("latin-1", errors="replace")
-                    m = _HS10_LINE.match(line)
+                    m = line_re.match(line)
                     if not m:
                         continue
                     code, _start, end, _unit, eng = m.groups()
@@ -274,7 +287,7 @@ def _load_hs10_descriptions(zip_path: Path) -> dict[str, str]:
                         end_per[code] = end
                         desc[code] = eng.strip()
     except Exception as e:
-        log.warning(f"  could not load HS-10 descriptions from {zip_path.name}: {e}")
+        log.warning(f"  could not load descriptions from {zip_path.name}: {e}")
     return desc
 
 
@@ -442,7 +455,9 @@ def main():
 
     all_dfs = []
     country_names: dict[str, str] = {}
-    hs10_descriptions: dict[str, str] = {}
+    # Both maps live in one dict keyed by full HS code. HS-10 (10 digits) and
+    # HS-8 (8 digits) codes can't collide, so a single lookup is safe.
+    hs_full_descriptions: dict[str, str] = {}
     for flow in FLOWS:
         for year in YEARS:
             log.info(f"--- {flow} {year} ---")
@@ -453,10 +468,16 @@ def main():
                 country_names = _load_country_names(zip_path)
                 if country_names:
                     log.info(f"  loaded {len(country_names)} country names")
-            if not hs10_descriptions:
-                hs10_descriptions = _load_hs10_descriptions(zip_path)
-                if hs10_descriptions:
-                    log.info(f"  loaded {len(hs10_descriptions):,} HS-10 descriptions")
+            # Pull whichever HS description file this flow's zip contains
+            # (HS-10 for imports, HS-8 for exports). Merge across zips so
+            # retired codes from old vintages still resolve.
+            new_desc = _load_hs10_descriptions(zip_path) or _load_hs8_descriptions(zip_path)
+            if new_desc:
+                before = len(hs_full_descriptions)
+                hs_full_descriptions.update(new_desc)
+                added = len(hs_full_descriptions) - before
+                if added:
+                    log.info(f"  loaded {added:,} HS descriptions (total {len(hs_full_descriptions):,})")
             df = parse_csv_in_zip(zip_path, hs_prefixes, flow, year)
             if not df.empty:
                 df = normalize(df)
@@ -557,10 +578,11 @@ def main():
     log.info(f"Wrote: {summary_csv}")
 
     # Slim parquet — small enough to commit to git for cloud-deployed dashboards.
-    # Aggregated to (year, hs6, hs_full, country) so the dashboard can drill
-    # from HS-6 to HS-10. Unit is constant per hs_full in CIMT, so summing
-    # quantity within an hs_full group is safe.
-    slim_cols = ["year", "hs6", "hs_full", "country"]
+    # Aggregated to (year, flow, hs6, hs_full, country) so the dashboard can
+    # split imports vs exports and drill from HS-6 to the most granular code
+    # CIMT publishes per flow (HS-10 for imports, HS-8 for exports). Unit is
+    # constant per hs_full so summing quantity within a group is safe.
+    slim_cols = ["year", "flow", "hs6", "hs_full", "country"]
     agg_dict = {"value_cad": "sum"}
     if "quantity_1" in long_df.columns:
         agg_dict["quantity_1"] = "sum"
@@ -569,8 +591,8 @@ def main():
         slim["hs_description"] = slim["hs6"].map(
             long_df.drop_duplicates("hs6").set_index("hs6")["hs_description"]
         )
-    if hs10_descriptions:
-        slim["hs_full_description"] = slim["hs_full"].map(hs10_descriptions)
+    if hs_full_descriptions:
+        slim["hs_full_description"] = slim["hs_full"].map(hs_full_descriptions)
     if "country_name" in long_df.columns:
         slim["country_name"] = slim["country"].map(
             long_df.dropna(subset=["country_name"])
@@ -578,11 +600,14 @@ def main():
             .set_index("country")["country_name"]
         )
     if "unit_1" in long_df.columns:
-        slim["unit_1"] = slim["hs_full"].map(
+        # Unit varies by hs_full and also by flow (imports report on HS-10,
+        # exports on HS-8). Dedup on (flow, hs_full) so the import unit of a
+        # 10-digit code doesn't bleed into an export 8-digit row.
+        unit_lookup = (
             long_df.dropna(subset=["unit_1"])
-            .drop_duplicates("hs_full")
-            .set_index("hs_full")["unit_1"]
+            .drop_duplicates(["flow", "hs_full"])[["flow", "hs_full", "unit_1"]]
         )
+        slim = slim.merge(unit_lookup, on=["flow", "hs_full"], how="left")
     slim_parquet = OUTPUT_DIR / "cimt_trade_slim.parquet"
     slim.to_parquet(slim_parquet, index=False)
     log.info(f"Wrote: {slim_parquet}  ({slim_parquet.stat().st_size:,} bytes)")

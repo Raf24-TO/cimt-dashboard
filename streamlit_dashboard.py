@@ -32,6 +32,30 @@ CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 CANADA_LAT, CANADA_LON = 56.130, -106.347
 ALL = "All"
 
+# Trade-flow display labels used wherever we surface the flow to the user.
+FLOW_LABELS = {
+    "imports": "Imports",
+    "domestic_exports": "Domestic exports",
+    "total_exports": "Total exports",
+}
+# Per-flow noun + Canada's role on the map.
+FLOW_NOUN = {
+    "imports": "imports",
+    "domestic_exports": "domestic exports",
+    "total_exports": "total exports",
+}
+# "Origin" vs "Destination" labels for the partner countries.
+PARTNER_NOUN = {
+    "imports": "origin",
+    "domestic_exports": "destination",
+    "total_exports": "destination",
+}
+CANADA_ROLE = {
+    "imports": "destination",
+    "domestic_exports": "origin",
+    "total_exports": "origin",
+}
+
 # Statistics Canada IPPI — NAPCS P73 (Electrical, electronic, audiovisual and
 # telecommunication products), Canada, annual averages. Index base 2020 = 100.
 # See Price Adjustments.md for sourcing and methodology.
@@ -273,7 +297,6 @@ def main():
     )
 
     st.title("Strengthening Canada's Grid Equipment Supply Chain")
-    st.caption("Canadian Imports — CIMT")
 
     if not LONG_PARQUET.exists() and not LONG_CSV.exists():
         st.error(
@@ -282,8 +305,55 @@ def main():
         )
         st.stop()
 
-    df = load_data(_data_file_signature())
+    df_all = load_data(_data_file_signature())
     coords = load_coords()
+
+    # ------------------------------------------------------------------
+    # Sidebar — pass 1: logo, Filters header, Trade flow toggle.
+    # The flow toggle must render BEFORE we derive per-flow lookups
+    # (HS-6 list, HS-10 children, year coverage) so they reflect just the
+    # selected flow's data.
+    # ------------------------------------------------------------------
+    with st.sidebar:
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), use_container_width=True)
+        else:
+            st.caption(
+                f"Logo placeholder — save the Transition Accelerator banner to "
+                f"`{LOGO_PATH.relative_to(ROOT)}` to display it here."
+            )
+
+        st.header("Filters")
+
+        if "flow" in df_all.columns:
+            # Preserve a canonical order so "imports" appears first regardless
+            # of alphabetical sort (otherwise "domestic_exports" wins).
+            canonical_order = ["imports", "domestic_exports", "total_exports"]
+            present = set(df_all["flow"].dropna().unique().tolist())
+            flows_in_data = [f for f in canonical_order if f in present] + sorted(
+                present - set(canonical_order)
+            )
+        else:
+            flows_in_data = ["imports"]
+        sel_flow = st.radio(
+            "Trade flow",
+            options=flows_in_data,
+            format_func=lambda f: FLOW_LABELS.get(f, f),
+            horizontal=True,
+            key="flow_select",
+            help=(
+                "Imports: HS-10 detail, by border crossing into Canada. "
+                "Domestic exports: HS-8 detail, Canadian-origin goods only "
+                "(re-exports excluded). Pick one — they shouldn't be summed."
+            ),
+        )
+
+    # Slice df to the chosen flow, then derive per-flow lookups.
+    if "flow" in df_all.columns:
+        df = df_all[df_all["flow"] == sel_flow].copy()
+    else:
+        df = df_all.copy()
+    st.caption(f"Canadian {FLOW_LABELS.get(sel_flow, sel_flow)} — CIMT")
 
     years_avail = sorted(df["year"].dropna().unique().tolist())
     hs_avail = (
@@ -294,8 +364,8 @@ def main():
     hs6_desc = dict(zip(hs_avail["hs6"], hs_avail["hs_description"].fillna("")))
     all_hs6 = hs_avail["hs6"].tolist()
 
-    # HS-10 → description map (used only when the user narrows to a single HS-6
-    # and wants per-HS-10 detail). May be empty for older slim parquets.
+    # HS-10 → description map (imports only — exports use HS-8). The "(detail)"
+    # picker further down only renders when the chosen flow exposes HS-10s.
     if "hs_full" in df.columns and "hs_full_description" in df.columns:
         hs10_avail = df[["hs_full", "hs_full_description", "hs6"]].drop_duplicates("hs_full")
         hs10_desc = dict(
@@ -321,18 +391,10 @@ def main():
     cat_to_tier = {c["label"]: c["tier"] for c in categories}
 
     # ------------------------------------------------------------------
-    # Sidebar filters
+    # Sidebar — pass 2: per-flow filters (Tier, Category, HS-4, HS-6,
+    # HS-10, Year, etc.).
     # ------------------------------------------------------------------
     with st.sidebar:
-        if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), use_container_width=True)
-        else:
-            st.caption(
-                f"Logo placeholder — save the Transition Accelerator banner to "
-                f"`{LOGO_PATH.relative_to(ROOT)}` to display it here."
-            )
-
-        st.header("Filters")
 
         # Reusable "All vs specifics" auto-deselect logic, parameterized by
         # the session-state keys used by each multiselect.
@@ -455,11 +517,13 @@ def main():
             hs10_options = sorted(
                 code for code, parent in hs10_to_hs6.items() if parent == single_hs6
             )
+            # Imports expose 10-digit codes; domestic exports only 8-digit.
+            detail_level = "HS-10" if sel_flow == "imports" else "HS-8"
             if len(hs10_options) > 1:
                 if "hs10_select" not in st.session_state:
                     st.session_state["hs10_select"] = [ALL]
                 sel_hs10_raw = st.multiselect(
-                    "HS-10 (detail)",
+                    f"{detail_level} (detail)",
                     options=[ALL] + hs10_options,
                     format_func=lambda c: c if c == ALL else f"{c} — {hs10_desc.get(c, '')}",
                     key="hs10_select",
@@ -467,14 +531,15 @@ def main():
                         "hs10_select", "hs10_prev"
                     ),
                     help=(
-                        "CIMT splits each HS-6 into one or more 10-digit codes "
-                        "(Canada-specific sub-classifications). Pick one or "
-                        "several to narrow the view, or leave on 'All'."
+                        f"CIMT splits each HS-6 into one or more {detail_level} "
+                        "codes (Canada-specific sub-classifications). Pick one "
+                        "or several to narrow the view, or leave on 'All'."
                     ),
                 )
                 st.session_state.setdefault("hs10_prev", list(sel_hs10_raw))
                 # Drop any selections that aren't valid under the current HS-6
-                # (otherwise a stale prior selection persists across HS-6 swaps).
+                # (otherwise a stale prior selection persists across HS-6 swaps,
+                # or across flow swaps where HS-10 ↔ HS-8 codes don't overlap).
                 valid_options = set(hs10_options)
                 if ALL in sel_hs10_raw or not sel_hs10_raw:
                     sel_hs_full = []
@@ -483,10 +548,9 @@ def main():
                         c for c in sel_hs10_raw if c != ALL and c in valid_options
                     ]
             elif len(hs10_options) == 1:
-                # Single HS-10 under this HS-6 — show it but no need to pick.
                 only = hs10_options[0]
                 st.caption(
-                    f"HS-10: **{only}** — {hs10_desc.get(only, '')[:60]}"
+                    f"{detail_level}: **{only}** — {hs10_desc.get(only, '')[:60]}"
                 )
 
         CUSTOM_RANGE = "Custom range…"
@@ -580,7 +644,7 @@ def main():
 
     _render_main_view(
         df, coords, hs6_desc, hs10_desc, sel_years, sel_hs, sel_hs_full,
-        year_label, top_n, log_size,
+        year_label, top_n, log_size, sel_flow,
     )
 
     st.markdown(
@@ -596,11 +660,17 @@ def main():
 
 def _render_main_view(
     df, coords, hs6_desc, hs10_desc, sel_years, sel_hs, sel_hs_full,
-    year_label, top_n, log_size,
+    year_label, top_n, log_size, sel_flow,
 ):
-    """Unified imports view (Value + Quantity). Origin breakdown shows quantity
+    """Unified trade view (Value + Quantity). Origin breakdown shows quantity
     alongside value when the current filter narrows to one CIMT unit. The
-    optional sel_hs_full list narrows further to specific HS-10 codes."""
+    optional sel_hs_full list narrows further to specific HS-10 / HS-8 codes.
+    sel_flow labels the flow ('imports', 'domestic_exports', ...) for label
+    text and the map's Canada role."""
+    flow_noun = FLOW_NOUN.get(sel_flow, "trade")
+    partner_noun = PARTNER_NOUN.get(sel_flow, "partner")
+    partner_plural = partner_noun.capitalize() + " countries"
+    canada_role = CANADA_ROLE.get(sel_flow, "destination")
     cad_basis = st.radio(
         "CAD basis",
         options=[NOMINAL_BASIS, REAL_BASIS],
@@ -673,7 +743,7 @@ def _render_main_view(
     #   • a "Select one HS-6" prompt (multi-HS-6 selection).
     # ------------------------------------------------------------------
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(f"Total imports ({basis_label})", fmt_cad(total))
+    c1.metric(f"Total {flow_noun} ({basis_label})", fmt_cad(total))
     if show_quantity:
         c2.metric(f"Total quantity ({unit_display})", _fmt_qty(total_qty, unit_display))
     elif len(sel_hs) == 1:
@@ -706,14 +776,17 @@ def _render_main_view(
                 "the Value/Quantity bar-chart toggle."
             ),
         )
-    c3.metric("Origin countries", f"{(agg['value_cad'] > 0).sum():,}")
+    c3.metric(partner_plural, f"{(agg['value_cad'] > 0).sum():,}")
     c4.metric("Year", year_label)
 
     # Show selected HS code descriptions (count surfaced in the expander
     # label since the headline metric row was reduced from 4 → 3 cells).
     if sel_hs:
         label_count = len(sel_hs_full) if sel_hs_full else len(sel_hs)
-        label_kind = "HS-10" if sel_hs_full else "HS-6"
+        if sel_hs_full:
+            label_kind = "HS-10" if sel_flow == "imports" else "HS-8"
+        else:
+            label_kind = "HS-6"
         with st.expander(f"Selected {label_kind} codes ({label_count})"):
             if sel_hs_full:
                 for c in sel_hs_full:
@@ -752,7 +825,7 @@ def _render_main_view(
                 (map_df["value_cad"].clip(lower=0) / max_v) ** 0.5 * span + min_size
             )
 
-    folium_map_html = _build_folium_map(map_df, total)
+    folium_map_html = _build_folium_map(map_df, total, canada_role=canada_role)
 
     # Treemap data: each origin sized by current-window value, coloured by
     # YoY change (most recent selected year vs the year before).
@@ -822,7 +895,7 @@ def _render_main_view(
         else:
             st.plotly_chart(treemap_fig, use_container_width=True)
             st.caption(
-                f"Rectangles sized by import value ({basis_label}); "
+                f"Rectangles sized by {flow_noun} value ({basis_label}); "
                 f"colour shows year-over-year change ({prior_yr} → {latest_yr}). "
                 "Grey = no prior-year data."
             )
@@ -843,6 +916,8 @@ def _render_main_view(
             is_value=(bar_metric_mode == "Value"),
             basis_label=basis_label,
             unit_display=unit_display,
+            flow_noun=flow_noun,
+            partner_noun=partner_noun,
         )
         st.plotly_chart(bar_fig, use_container_width=True)
 
@@ -852,15 +927,16 @@ def _render_main_view(
     # Single-unit detection was computed earlier (drives both headline + table).
     breakdown_col, yoy_col = st.columns(2, gap="large", vertical_alignment="top")
     with breakdown_col:
-        st.subheader("Origin breakdown")
+        st.subheader(f"{partner_noun.capitalize()} breakdown")
         intro = (
-            f"All origin countries for {year_label} (sorted by value, {basis_label}). "
+            f"All {partner_noun} countries for {year_label} "
+            f"(sorted by value, {basis_label}). "
             "Click a row to see that country's HS-6 breakdown."
         )
         if show_quantity:
             intro = (
-                f"All origin countries for {year_label} — value ({basis_label}) "
-                f"and quantity ({unit_display}) side by side."
+                f"All {partner_noun} countries for {year_label} — "
+                f"value ({basis_label}) and quantity ({unit_display}) side by side."
             )
         st.markdown(
             "<div style='min-height:46px;color:#666;font-size:13px;"
@@ -1080,9 +1156,12 @@ def _build_yearly_bar_fig(
     is_value: bool,
     basis_label: str,
     unit_display: str,
+    flow_noun: str = "imports",
+    partner_noun: str = "origin",
 ) -> go.Figure:
-    """Stacked per-year bar chart by origin. Same shape for value and quantity —
-    the metric column, axis label, and hover format swap between modes."""
+    """Stacked per-year bar chart by partner country. Same shape for value and
+    quantity — the metric column, axis label, and hover format swap between
+    modes. flow_noun / partner_noun parameterize the title for exports."""
     metric_col = "value_cad" if is_value else "quantity_1"
 
     yearly_country = (
@@ -1126,7 +1205,7 @@ def _build_yearly_bar_fig(
     # Mode-specific labels/formats.
     if is_value:
         title_text = (
-            "Annual imports — each year's top 5 origins + Others "
+            f"Annual {flow_noun} — each year's top 5 {partner_noun}s + Others "
             f"({basis_label})"
         )
         yaxis_title = f"Value ({basis_label})"
@@ -1134,7 +1213,7 @@ def _build_yearly_bar_fig(
         hover_y = "$%{y:,.0f}"
     else:
         title_text = (
-            "Annual quantity — each year's top 5 origins + Others "
+            f"Annual quantity — each year's top 5 {partner_noun}s + Others "
             f"({unit_display})"
         )
         yaxis_title = f"Quantity ({unit_display})"
@@ -1296,9 +1375,12 @@ def _flag_marker_html(iso2: str, size: int, *, ring_color: str = "white", ring_w
     )
 
 
-def _build_folium_map(map_df: pd.DataFrame, total: float) -> str:
+def _build_folium_map(
+    map_df: pd.DataFrame, total: float, *, canada_role: str = "destination",
+) -> str:
     """Return a self-contained HTML string with a Folium map: Canada shaded
-    as the destination, plus per-origin circular flag markers sized by value."""
+    as the destination (imports) or origin (exports), plus per-partner
+    circular flag markers sized by value."""
     m = folium.Map(
         location=[20, -30],
         zoom_start=2,
@@ -1308,12 +1390,11 @@ def _build_folium_map(map_df: pd.DataFrame, total: float) -> str:
         min_zoom=2,
     )
 
-    # Canada shaded as the destination.
     canada_geo = load_canada_geojson()
     if canada_geo is not None:
         canada_tooltip = folium.Tooltip(
             f"<div style='font-family:system-ui,sans-serif;font-size:13px;'>"
-            f"<b>Canada (destination)</b><br>Total: {fmt_cad(total)}</div>",
+            f"<b>Canada ({canada_role})</b><br>Total: {fmt_cad(total)}</div>",
             sticky=False,
         )
         folium.GeoJson(
