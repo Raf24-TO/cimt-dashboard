@@ -69,10 +69,24 @@ def apply_deflation(frame: pd.DataFrame, basis: str) -> pd.DataFrame:
     return frame.assign(value_cad=frame["value_cad"] * factor)
 
 
+def _data_file_signature() -> tuple[str, float, int]:
+    """Cache-buster: when the slim parquet (or fallback CSV) changes on disk,
+    its mtime/size shift and st.cache_data treats it as a new input."""
+    for p in (LONG_PARQUET, LONG_CSV):
+        if p.exists():
+            stat = p.stat()
+            return (str(p), stat.st_mtime, stat.st_size)
+    return ("", 0.0, 0)
+
+
 @st.cache_data(show_spinner="Loading trade data…")
-def load_data() -> pd.DataFrame:
+def load_data(signature: tuple[str, float, int] | None = None) -> pd.DataFrame:
     """Prefer the slim Parquet (committed to git for cloud deploy); fall back to
-    the full CSV produced by extract_cimt_trade.py for local development."""
+    the full CSV produced by extract_cimt_trade.py for local development.
+
+    The signature parameter is unused inside the body — it exists only to
+    invalidate the cache when the source file's mtime/size change."""
+    del signature  # only consumed by @st.cache_data's hashing
     if LONG_PARQUET.exists():
         df = pd.read_parquet(LONG_PARQUET)
     else:
@@ -83,6 +97,10 @@ def load_data() -> pd.DataFrame:
         )
     df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
     df["value_cad"] = pd.to_numeric(df["value_cad"], errors="coerce").fillna(0)
+    if "quantity_1" in df.columns:
+        df["quantity_1"] = pd.to_numeric(df["quantity_1"], errors="coerce").fillna(0)
+    if "unit_1" not in df.columns:
+        df["unit_1"] = pd.NA
     return df
 
 
@@ -198,7 +216,7 @@ def main():
             padding-bottom: 6px !important;
             min-height: 36px !important;
         }
-        /* Currently-selected value in a selectbox */
+        /* Currently-selected value in a selectbox / multiselect chip */
         [data-baseweb="select"] [data-baseweb="tag"],
         [data-baseweb="select"] div[role="combobox"],
         [data-baseweb="select"] div[role="combobox"] > div,
@@ -208,6 +226,23 @@ def main():
             text-overflow: clip !important;
             line-height: 1.3 !important;
             height: auto !important;
+        }
+        /* BaseWeb caps each multiselect chip's width (~150px) and ellipsises
+           the inner span. Lift the cap so chips expand to the container width
+           and wrap to multiple lines instead of truncating. */
+        [data-baseweb="select"] [data-baseweb="tag"] {
+            max-width: 100% !important;
+            width: auto !important;
+        }
+        [data-baseweb="select"] [data-baseweb="tag"] *,
+        [data-baseweb="select"] [data-baseweb="tag"] span,
+        [data-baseweb="select"] [data-baseweb="tag"] div {
+            max-width: none !important;
+            width: auto !important;
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            word-break: break-word !important;
         }
         /* Remove Streamlit's default ~5rem bottom padding on the main
            content container, so the in-flow footer sits flush at the bottom
@@ -237,23 +272,8 @@ def main():
         unsafe_allow_html=True,
     )
 
-    title_col, basis_col = st.columns([4, 1])
-    with title_col:
-        st.title("Strengthening Canada's Grid Equipment Supply Chain")
-        st.caption("Canadian Imports — CIMT")
-    with basis_col:
-        cad_basis = st.radio(
-            "CAD basis",
-            options=[NOMINAL_BASIS, REAL_BASIS],
-            index=0,
-            horizontal=True,
-            help=(
-                "Nominal CAD: as-recorded values. "
-                "2025 CAD: deflated using the StatCan IPPI for NAPCS P73 "
-                "(electrical/electronic equipment). See Price Adjustments.md."
-            ),
-        )
-    basis_label = "nominal CAD" if cad_basis == NOMINAL_BASIS else "2025 CAD"
+    st.title("Strengthening Canada's Grid Equipment Supply Chain")
+    st.caption("Canadian Imports — CIMT")
 
     if not LONG_PARQUET.exists() and not LONG_CSV.exists():
         st.error(
@@ -262,7 +282,7 @@ def main():
         )
         st.stop()
 
-    df = load_data()
+    df = load_data(_data_file_signature())
     coords = load_coords()
 
     years_avail = sorted(df["year"].dropna().unique().tolist())
@@ -273,6 +293,18 @@ def main():
     )
     hs6_desc = dict(zip(hs_avail["hs6"], hs_avail["hs_description"].fillna("")))
     all_hs6 = hs_avail["hs6"].tolist()
+
+    # HS-10 → description map (used only when the user narrows to a single HS-6
+    # and wants per-HS-10 detail). May be empty for older slim parquets.
+    if "hs_full" in df.columns and "hs_full_description" in df.columns:
+        hs10_avail = df[["hs_full", "hs_full_description", "hs6"]].drop_duplicates("hs_full")
+        hs10_desc = dict(
+            zip(hs10_avail["hs_full"], hs10_avail["hs_full_description"].fillna(""))
+        )
+        hs10_to_hs6 = dict(zip(hs10_avail["hs_full"], hs10_avail["hs6"]))
+    else:
+        hs10_desc = {}
+        hs10_to_hs6 = {}
 
     # HS-4 codes from the priority file; fall back to HS-4 prefixes that exist
     # in the data when descriptions aren't available.
@@ -416,6 +448,47 @@ def main():
         else:
             sel_hs = [c for c in sel_hs_raw if c != ALL]
 
+        # ---- HS-10 detail (only when exactly one HS-6 is picked) -------
+        sel_hs_full: list[str] = []
+        if len(sel_hs) == 1 and hs10_to_hs6:
+            single_hs6 = sel_hs[0]
+            hs10_options = sorted(
+                code for code, parent in hs10_to_hs6.items() if parent == single_hs6
+            )
+            if len(hs10_options) > 1:
+                if "hs10_select" not in st.session_state:
+                    st.session_state["hs10_select"] = [ALL]
+                sel_hs10_raw = st.multiselect(
+                    "HS-10 (detail)",
+                    options=[ALL] + hs10_options,
+                    format_func=lambda c: c if c == ALL else f"{c} — {hs10_desc.get(c, '')}",
+                    key="hs10_select",
+                    on_change=_make_all_or_specific_callback(
+                        "hs10_select", "hs10_prev"
+                    ),
+                    help=(
+                        "CIMT splits each HS-6 into one or more 10-digit codes "
+                        "(Canada-specific sub-classifications). Pick one or "
+                        "several to narrow the view, or leave on 'All'."
+                    ),
+                )
+                st.session_state.setdefault("hs10_prev", list(sel_hs10_raw))
+                # Drop any selections that aren't valid under the current HS-6
+                # (otherwise a stale prior selection persists across HS-6 swaps).
+                valid_options = set(hs10_options)
+                if ALL in sel_hs10_raw or not sel_hs10_raw:
+                    sel_hs_full = []
+                else:
+                    sel_hs_full = [
+                        c for c in sel_hs10_raw if c != ALL and c in valid_options
+                    ]
+            elif len(hs10_options) == 1:
+                # Single HS-10 under this HS-6 — show it but no need to pick.
+                only = hs10_options[0]
+                st.caption(
+                    f"HS-10: **{only}** — {hs10_desc.get(only, '')[:60]}"
+                )
+
         CUSTOM_RANGE = "Custom range…"
         year_options = list(years_avail) + [CUSTOM_RANGE]
         sel_year_choice = st.selectbox(
@@ -505,10 +578,54 @@ def main():
         f"{min(sel_years)}–{max(sel_years)}" if len(sel_years) > 1 else str(sel_years[0])
     )
 
+    _render_main_view(
+        df, coords, hs6_desc, hs10_desc, sel_years, sel_hs, sel_hs_full,
+        year_label, top_n, log_size,
+    )
+
+    st.markdown(
+        "<hr style='margin-top:32px;margin-bottom:6px;border:none;"
+        "border-top:1px solid #eee;'>"
+        "<div style='text-align:right;color:#888;font-size:11px;"
+        "padding-bottom:16px;'>"
+        "Version 1.0 · Developed by Rami F. · Data extracted 5 May 2026"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_main_view(
+    df, coords, hs6_desc, hs10_desc, sel_years, sel_hs, sel_hs_full,
+    year_label, top_n, log_size,
+):
+    """Unified imports view (Value + Quantity). Origin breakdown shows quantity
+    alongside value when the current filter narrows to one CIMT unit. The
+    optional sel_hs_full list narrows further to specific HS-10 codes."""
+    cad_basis = st.radio(
+        "CAD basis",
+        options=[NOMINAL_BASIS, REAL_BASIS],
+        index=0,
+        horizontal=True,
+        key="cad_basis_radio",
+        help=(
+            "Nominal CAD: as-recorded values. "
+            "2025 CAD: deflated using the StatCan IPPI for NAPCS P73 "
+            "(electrical/electronic equipment). See Price Adjustments.md."
+        ),
+    )
+    basis_label = "nominal CAD" if cad_basis == NOMINAL_BASIS else "2025 CAD"
+
+    # Optional HS-10 narrowing layered on top of the HS-6 filter. Used in every
+    # downstream filter (headline, deflation, bar chart) so the entire view
+    # stays consistent.
+    hs_mask = df["hs6"].isin(sel_hs)
+    if sel_hs_full:
+        hs_mask = hs_mask & df["hs_full"].isin(sel_hs_full)
+
     # ------------------------------------------------------------------
     # Filter & aggregate
     # ------------------------------------------------------------------
-    mask = df["year"].isin(sel_years) & df["hs6"].isin(sel_hs)
+    mask = df["year"].isin(sel_years) & hs_mask
     view = apply_deflation(df.loc[mask], cad_basis)
 
     if view.empty:
@@ -531,20 +648,79 @@ def main():
     )
     total = float(agg["value_cad"].sum())
 
+    # Quantity is shown only when the filter narrows to exactly one HS-6 AND
+    # all rows share a single CIMT unit. Aggregating quantity across distinct
+    # HS-6 codes is meaningless even when they happen to share a unit
+    # (e.g. summing transformers + switchgear in NMB has no real-world
+    # interpretation), so we suppress quantity above the HS-6 level.
+    single_hs_unit_raw = ""
+    if "unit_1" in view.columns:
+        units_seen = {str(u) for u in view["unit_1"].dropna().unique() if u}
+        if len(units_seen) == 1:
+            single_hs_unit_raw = next(iter(units_seen))
+    show_quantity = bool(single_hs_unit_raw) and len(sel_hs) == 1
+    unit_display = _display_unit(single_hs_unit_raw) if show_quantity else ""
+    total_qty = (
+        float(view["quantity_1"].sum())
+        if show_quantity and "quantity_1" in view.columns
+        else 0.0
+    )
+
     # ------------------------------------------------------------------
-    # Headline metrics
+    # Headline metrics — always 4 cells. The 4th cell is either:
+    #   • the real Total quantity (single HS-6 with a CIMT unit),
+    #   • "Not reported" (single HS-6 with no unit), or
+    #   • a "Select one HS-6" prompt (multi-HS-6 selection).
     # ------------------------------------------------------------------
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric(f"Total imports ({basis_label})", fmt_cad(total))
-    c2.metric("Origin countries", f"{(agg['value_cad'] > 0).sum():,}")
-    c3.metric("Year", year_label)
+    if show_quantity:
+        c2.metric(f"Total quantity ({unit_display})", _fmt_qty(total_qty, unit_display))
+    elif len(sel_hs) == 1:
+        c2.metric(
+            "Total quantity",
+            "Not reported",
+            help=(
+                "StatCan CIMT tracks this HS code by value only — no "
+                "kilogram or unit count is recorded for any transaction. "
+                "Common for high-voltage electrical equipment, where items "
+                "in the category vary too widely in size/scale to be "
+                "meaningfully counted."
+            ),
+        )
+    else:
+        n_hs4 = len({c[:4] for c in sel_hs})
+        scope = (
+            f"{n_hs4} HS-4 categories" if n_hs4 > 1
+            else f"{len(sel_hs)} HS-6 codes"
+        )
+        c2.metric(
+            "Total quantity",
+            "Select one HS-6",
+            help=(
+                f"You currently have {scope} selected. Quantity sums "
+                "aren't meaningful across distinct HS-6 codes — even within "
+                "the same HS-4 category, different HS-6 codes describe "
+                "different products. Narrow the sidebar HS-6 filter to a "
+                "single code to see total quantity, average unit price, and "
+                "the Value/Quantity bar-chart toggle."
+            ),
+        )
+    c3.metric("Origin countries", f"{(agg['value_cad'] > 0).sum():,}")
+    c4.metric("Year", year_label)
 
     # Show selected HS code descriptions (count surfaced in the expander
     # label since the headline metric row was reduced from 4 → 3 cells).
     if sel_hs:
-        with st.expander(f"Selected HS codes ({len(sel_hs)})"):
-            for c in sel_hs:
-                st.markdown(f"- **{c}** — {hs6_desc.get(c, '')}")
+        label_count = len(sel_hs_full) if sel_hs_full else len(sel_hs)
+        label_kind = "HS-10" if sel_hs_full else "HS-6"
+        with st.expander(f"Selected {label_kind} codes ({label_count})"):
+            if sel_hs_full:
+                for c in sel_hs_full:
+                    st.markdown(f"- **{c}** — {hs10_desc.get(c, '')}")
+            else:
+                for c in sel_hs:
+                    st.markdown(f"- **{c}** — {hs6_desc.get(c, '')}")
 
     # ------------------------------------------------------------------
     # Build map
@@ -583,7 +759,7 @@ def main():
     latest_yr = max(sel_years)
     prior_yr = latest_yr - 1
     deflated_full = apply_deflation(
-        df[df["hs6"].isin(sel_hs) & (df["country"] != "CA")], cad_basis
+        df[hs_mask & (df["country"] != "CA")], cad_basis
     )
     cur_by_country = (
         deflated_full[deflated_full["year"] == latest_yr]
@@ -610,149 +786,17 @@ def main():
     )
 
     # ------------------------------------------------------------------
-    # Stacked bar chart: per-year imports across the full year range.
-    # Each year shows its OWN top 5 origins plus an "Others" bucket, so the
-    # set of named countries can shift between years.
+    # Bar chart data — built lazily inside the chart column so the toggle
+    # (Value / Quantity) can drive which metric is plotted.
     # ------------------------------------------------------------------
     bar_view = apply_deflation(
-        df[df["hs6"].isin(sel_hs) & (df["country"] != "CA")], cad_basis
+        df[hs_mask & (df["country"] != "CA")], cad_basis
     )
     country_label = (
         bar_view.dropna(subset=["country_name"])
         .drop_duplicates("country")
         .set_index("country")["country_name"]
         .to_dict()
-    )
-
-    # Rank countries within each year; rank > 5 collapses into "Others".
-    yearly_country = (
-        bar_view.dropna(subset=["year"])
-        .groupby(["year", "country"], as_index=False, dropna=False)["value_cad"]
-        .sum()
-    )
-    yearly_country["rank"] = yearly_country.groupby("year")["value_cad"].rank(
-        method="first", ascending=False
-    )
-    yearly_country["bucket"] = yearly_country["country"].where(
-        yearly_country["rank"] <= 5, "Others"
-    )
-    yearly = yearly_country.groupby(
-        ["year", "bucket"], as_index=False
-    )["value_cad"].sum()
-    year_totals = yearly.groupby("year")["value_cad"].sum().to_dict()
-    yearly["pct"] = yearly.apply(
-        lambda r: (r["value_cad"] / year_totals[r["year"]] * 100.0)
-        if year_totals.get(r["year"], 0) else 0.0,
-        axis=1,
-    )
-
-    # Union of countries that ever appeared in any year's top 5,
-    # ordered by cumulative value across the full window.
-    top5_union = (
-        yearly_country[yearly_country["rank"] <= 5]
-        .groupby("country")["value_cad"]
-        .sum()
-        .sort_values(ascending=False)
-        .index.tolist()
-    )
-
-    # Stable colour per country, drawn from the brand palette extended with
-    # darker variants for the long-tail countries that may appear in only one
-    # or two years.
-    palette_extended = [
-        "#F53C23", "#A59669", "#8282EB", "#0AB96E", "#FFB300", "#1A98AF",
-        "#B22A18", "#6F6346", "#4F4FCC", "#066E42", "#C28A00", "#107488",
-    ]
-    country_colors = {
-        c: palette_extended[i % len(palette_extended)]
-        for i, c in enumerate(top5_union)
-    }
-    others_color = "#9AA0A6"
-
-    bar_fig = go.Figure()
-    for country in top5_union:
-        sub = yearly[yearly["bucket"] == country].sort_values("year")
-        if sub.empty or sub["value_cad"].sum() == 0:
-            continue
-        name = country_label.get(country, country)
-        bar_fig.add_trace(
-            go.Bar(
-                name=name,
-                x=sub["year"].astype(int),
-                y=sub["value_cad"],
-                customdata=sub["pct"],
-                marker_color=country_colors[country],
-                hovertemplate=(
-                    f"<b>{name}</b><br>$%{{y:,.0f}}<br>"
-                    "%{customdata:.1f}% of year<extra></extra>"
-                ),
-            )
-        )
-
-    others_sub = yearly[yearly["bucket"] == "Others"].sort_values("year").copy()
-    if not others_sub.empty:
-        others_per_year = (
-            yearly_country.loc[
-                (yearly_country["rank"] > 5)
-                & (yearly_country["value_cad"] > 0)
-            ]
-            .groupby("year")["country"]
-            .nunique()
-            .to_dict()
-        )
-        others_sub["n"] = (
-            others_sub["year"].map(others_per_year).fillna(0).astype(int)
-        )
-        bar_fig.add_trace(
-            go.Bar(
-                name="Others",
-                x=others_sub["year"].astype(int),
-                y=others_sub["value_cad"],
-                customdata=others_sub[["pct", "n"]].to_numpy(),
-                marker_color=others_color,
-                hovertemplate=(
-                    "<b>Others (%{customdata[1]})</b><br>$%{y:,.0f}<br>"
-                    "%{customdata[0]:.1f}% of year<extra></extra>"
-                ),
-            )
-        )
-    # Dynamically size the bottom margin so a legend with many countries (the
-    # union of every year's top 5 can easily reach 10+ entries) never spills
-    # back into the plot area.
-    n_traces = len(bar_fig.data)
-    legend_rows = max(1, math.ceil(n_traces / 3))
-    legend_px = 30 + legend_rows * 22
-    plot_px = 380
-    fig_height = plot_px + legend_px
-
-    bar_fig.update_layout(
-        barmode="stack",
-        height=fig_height,
-        margin=dict(l=10, r=10, t=30, b=legend_px),
-        title=dict(
-            text=(
-                "Annual imports — each year's top 5 origins + Others "
-                f"({basis_label})"
-            ),
-            x=0,
-            font=dict(size=14),
-        ),
-        xaxis=dict(title=None, dtick=1, automargin=True),
-        yaxis=dict(
-            title=f"Value ({basis_label})",
-            tickformat="$,.0s",
-            automargin=True,
-        ),
-        legend=dict(
-            orientation="h",
-            yref="container",
-            yanchor="bottom",
-            y=8 / fig_height,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=11),
-            bgcolor="rgba(255,255,255,0.95)",
-        ),
     )
 
     # ------------------------------------------------------------------
@@ -783,20 +827,44 @@ def main():
                 "Grey = no prior-year data."
             )
     with chart_col:
+        if show_quantity:
+            bar_metric_mode = st.radio(
+                "Bar metric",
+                options=["Value", "Quantity"],
+                index=0,
+                horizontal=True,
+                label_visibility="collapsed",
+                key="bar_metric_mode",
+            )
+        else:
+            bar_metric_mode = "Value"
+        bar_fig = _build_yearly_bar_fig(
+            bar_view, country_label,
+            is_value=(bar_metric_mode == "Value"),
+            basis_label=basis_label,
+            unit_display=unit_display,
+        )
         st.plotly_chart(bar_fig, use_container_width=True)
 
     # ------------------------------------------------------------------
     # Bottom row: origin breakdown (left) + YoY insights (right)
     # ------------------------------------------------------------------
+    # Single-unit detection was computed earlier (drives both headline + table).
     breakdown_col, yoy_col = st.columns(2, gap="large", vertical_alignment="top")
     with breakdown_col:
         st.subheader("Origin breakdown")
-        st.markdown(
-            "<div style='min-height:46px;color:#666;font-size:13px;"
-            "line-height:1.4;margin-bottom:8px;'>"
+        intro = (
             f"All origin countries for {year_label} (sorted by value, {basis_label}). "
             "Click a row to see that country's HS-6 breakdown."
-            "</div>",
+        )
+        if show_quantity:
+            intro = (
+                f"All origin countries for {year_label} — value ({basis_label}) "
+                f"and quantity ({unit_display}) side by side."
+            )
+        st.markdown(
+            "<div style='min-height:46px;color:#666;font-size:13px;"
+            f"line-height:1.4;margin-bottom:8px;'>{intro}</div>",
             unsafe_allow_html=True,
         )
 
@@ -807,6 +875,19 @@ def main():
         breakdown_df["share"] = (
             breakdown_df["value_cad"] / total if total > 0 else 0.0
         )
+        if show_quantity:
+            qty_by_country = (
+                view.groupby("country", dropna=False)["quantity_1"].sum().to_dict()
+            )
+            breakdown_df["quantity_1"] = (
+                breakdown_df["country"].map(qty_by_country).fillna(0.0)
+            )
+            breakdown_df["avg_unit_price"] = breakdown_df.apply(
+                lambda r: (r["value_cad"] / r["quantity_1"])
+                if r["quantity_1"] and r["quantity_1"] > 0
+                else None,
+                axis=1,
+            )
 
         # Persistent text search — survives year/basis changes since the
         # widget keeps its value via Streamlit's session storage.
@@ -824,9 +905,11 @@ def main():
             breakdown_df = breakdown_df[mask]
 
         breakdown_df = breakdown_df.reset_index(drop=True)
-        breakdown_display = breakdown_df[
-            ["flag", "country_name", "value_cad", "share"]
-        ]
+        display_cols = ["flag", "country_name", "value_cad"]
+        if show_quantity:
+            display_cols += ["quantity_1", "avg_unit_price"]
+        display_cols.append("share")
+        breakdown_display = breakdown_df[display_cols]
 
         if breakdown_df.empty:
             st.info(
@@ -842,21 +925,30 @@ def main():
             # would silently jump to whoever held that row index in the new
             # data set).
             year_key = "_".join(str(y) for y in sorted(sel_years))
-            selection_key = f"origin_table::{year_key}::{search}"
+            selection_key = f"origin_table::{year_key}::{search}::{single_hs_unit_raw}"
 
+            column_config = {
+                "flag": st.column_config.ImageColumn(label="", width="small"),
+                "country_name": st.column_config.TextColumn(label="Country"),
+                "value_cad": st.column_config.NumberColumn(
+                    label=f"Value ({basis_label})", format="dollar"
+                ),
+                "share": st.column_config.NumberColumn(label="Share", format="percent"),
+            }
+            if show_quantity:
+                column_config["quantity_1"] = st.column_config.NumberColumn(
+                    label=f"Quantity ({unit_display})", format="localized"
+                )
+                column_config["avg_unit_price"] = st.column_config.NumberColumn(
+                    label=f"Avg unit price ({basis_label} / {unit_display})",
+                    format="dollar",
+                )
             selection = st.dataframe(
                 breakdown_display,
                 hide_index=True,
                 use_container_width=True,
                 height=360,
-                column_config={
-                    "flag": st.column_config.ImageColumn(label="", width="small"),
-                    "country_name": st.column_config.TextColumn(label="Country"),
-                    "value_cad": st.column_config.NumberColumn(
-                        label=f"Value ({basis_label})", format="dollar"
-                    ),
-                    "share": st.column_config.NumberColumn(label="Share", format="percent"),
-                },
+                column_config=column_config,
                 on_select="rerun",
                 selection_mode="single-row",
                 key=selection_key,
@@ -931,15 +1023,165 @@ def main():
         else:
             st.markdown(_render_yoy_table(insights), unsafe_allow_html=True)
 
-    st.markdown(
-        "<hr style='margin-top:32px;margin-bottom:6px;border:none;"
-        "border-top:1px solid #eee;'>"
-        "<div style='text-align:right;color:#888;font-size:11px;"
-        "padding-bottom:16px;'>"
-        "Version 1.0 · Developed by Rami F. · Data extracted 5 May 2026"
-        "</div>",
-        unsafe_allow_html=True,
+
+
+def _display_unit(unit_raw: str) -> str:
+    """Map CIMT's raw unit codes to user-facing labels (only NMB so far)."""
+    return {"NMB": "units"}.get((unit_raw or "").upper(), unit_raw or "")
+
+
+def _fmt_qty(v: float, unit: str) -> str:
+    return f"{v:,.0f} {unit}"
+
+
+
+
+
+def _build_yearly_bar_fig(
+    bar_view: pd.DataFrame,
+    country_label: dict,
+    *,
+    is_value: bool,
+    basis_label: str,
+    unit_display: str,
+) -> go.Figure:
+    """Stacked per-year bar chart by origin. Same shape for value and quantity —
+    the metric column, axis label, and hover format swap between modes."""
+    metric_col = "value_cad" if is_value else "quantity_1"
+
+    yearly_country = (
+        bar_view.dropna(subset=["year"])
+        .groupby(["year", "country"], as_index=False, dropna=False)[metric_col]
+        .sum()
     )
+    yearly_country["rank"] = yearly_country.groupby("year")[metric_col].rank(
+        method="first", ascending=False
+    )
+    yearly_country["bucket"] = yearly_country["country"].where(
+        yearly_country["rank"] <= 5, "Others"
+    )
+    yearly = yearly_country.groupby(
+        ["year", "bucket"], as_index=False
+    )[metric_col].sum()
+    year_totals = yearly.groupby("year")[metric_col].sum().to_dict()
+    yearly["pct"] = yearly.apply(
+        lambda r: (r[metric_col] / year_totals[r["year"]] * 100.0)
+        if year_totals.get(r["year"], 0) else 0.0,
+        axis=1,
+    )
+    top5_union = (
+        yearly_country[yearly_country["rank"] <= 5]
+        .groupby("country")[metric_col]
+        .sum()
+        .sort_values(ascending=False)
+        .index.tolist()
+    )
+
+    palette_extended = [
+        "#F53C23", "#A59669", "#8282EB", "#0AB96E", "#FFB300", "#1A98AF",
+        "#B22A18", "#6F6346", "#4F4FCC", "#066E42", "#C28A00", "#107488",
+    ]
+    country_colors = {
+        c: palette_extended[i % len(palette_extended)]
+        for i, c in enumerate(top5_union)
+    }
+    others_color = "#9AA0A6"
+
+    # Mode-specific labels/formats.
+    if is_value:
+        title_text = (
+            "Annual imports — each year's top 5 origins + Others "
+            f"({basis_label})"
+        )
+        yaxis_title = f"Value ({basis_label})"
+        yaxis_fmt = "$,.0s"
+        hover_y = "$%{y:,.0f}"
+    else:
+        title_text = (
+            "Annual quantity — each year's top 5 origins + Others "
+            f"({unit_display})"
+        )
+        yaxis_title = f"Quantity ({unit_display})"
+        yaxis_fmt = ",.0s"
+        hover_y = "%{y:,.0f} " + unit_display
+
+    bar_fig = go.Figure()
+    for country in top5_union:
+        sub = yearly[yearly["bucket"] == country].sort_values("year")
+        if sub.empty or sub[metric_col].sum() == 0:
+            continue
+        name = country_label.get(country, country)
+        bar_fig.add_trace(
+            go.Bar(
+                name=name,
+                x=sub["year"].astype(int),
+                y=sub[metric_col],
+                customdata=sub["pct"],
+                marker_color=country_colors[country],
+                hovertemplate=(
+                    f"<b>{name}</b><br>{hover_y}<br>"
+                    "%{customdata:.1f}% of year<extra></extra>"
+                ),
+            )
+        )
+
+    others_sub = yearly[yearly["bucket"] == "Others"].sort_values("year").copy()
+    if not others_sub.empty:
+        others_per_year = (
+            yearly_country.loc[
+                (yearly_country["rank"] > 5)
+                & (yearly_country[metric_col] > 0)
+            ]
+            .groupby("year")["country"]
+            .nunique()
+            .to_dict()
+        )
+        others_sub["n"] = (
+            others_sub["year"].map(others_per_year).fillna(0).astype(int)
+        )
+        bar_fig.add_trace(
+            go.Bar(
+                name="Others",
+                x=others_sub["year"].astype(int),
+                y=others_sub[metric_col],
+                customdata=others_sub[["pct", "n"]].to_numpy(),
+                marker_color=others_color,
+                hovertemplate=(
+                    "<b>Others (%{customdata[1]})</b><br>" + hover_y + "<br>"
+                    "%{customdata[0]:.1f}% of year<extra></extra>"
+                ),
+            )
+        )
+
+    n_traces = len(bar_fig.data)
+    legend_rows = max(1, math.ceil(n_traces / 3))
+    legend_px = 30 + legend_rows * 22
+    plot_px = 380
+    fig_height = plot_px + legend_px
+
+    bar_fig.update_layout(
+        barmode="stack",
+        height=fig_height,
+        margin=dict(l=10, r=10, t=30, b=legend_px),
+        title=dict(text=title_text, x=0, font=dict(size=14)),
+        xaxis=dict(title=None, dtick=1, automargin=True),
+        yaxis=dict(
+            title=yaxis_title,
+            tickformat=yaxis_fmt,
+            automargin=True,
+        ),
+        legend=dict(
+            orientation="h",
+            yref="container",
+            yanchor="bottom",
+            y=8 / fig_height,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=11),
+            bgcolor="rgba(255,255,255,0.95)",
+        ),
+    )
+    return bar_fig
 
 
 def _build_treemap(
