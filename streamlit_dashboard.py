@@ -458,6 +458,13 @@ def main():
         else:
             sel_categories = [c for c in sel_categories_raw if c != ALL]
 
+        # HS-4 codes present in the current tier scope. When the user picks
+        # specific tiers without further narrowing by Category, this set
+        # bounds the rest of the cascade so the Tier filter actually
+        # reaches the data (and isn't only cosmetic on the Category list).
+        tier_scoped_hs4_set = {c["hs4"] for c in visible_categories}
+        tier_is_narrowed = sel_tiers != set(tiers_avail)
+
         if sel_categories:
             selected_hs4_set = {cat_to_hs4[c] for c in sel_categories}
             sel_hs4 = ALL  # individual HS-4 picker is hidden when categories rule
@@ -472,18 +479,26 @@ def main():
             )
         else:
             selected_hs4_set = None
+            hs4_picker_options = (
+                [c for c in hs4_codes if c in tier_scoped_hs4_set]
+                if tier_is_narrowed else hs4_codes
+            )
             sel_hs4 = st.selectbox(
                 "HS-4 (heading)",
-                options=[ALL] + hs4_codes,
+                options=[ALL] + hs4_picker_options,
                 format_func=lambda c: c if c == ALL else f"{c} — {hs4_desc.get(c, '')}",
             )
 
-        # HS-6 options scoped by either the categories' HS-4 set or the
-        # individual HS-4 picker.
+        # HS-6 options scoped by either the categories' HS-4 set, the
+        # individual HS-4 picker, or — when neither is narrowed — the
+        # tier scope.
         if selected_hs4_set:
             visible_hs6 = [c for c in all_hs6 if c[:4] in selected_hs4_set]
         elif sel_hs4 == ALL:
-            visible_hs6 = all_hs6
+            if tier_is_narrowed:
+                visible_hs6 = [c for c in all_hs6 if c[:4] in tier_scoped_hs4_set]
+            else:
+                visible_hs6 = all_hs6
         else:
             visible_hs6 = [c for c in all_hs6 if c.startswith(sel_hs4)]
 
