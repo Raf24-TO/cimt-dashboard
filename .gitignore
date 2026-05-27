@@ -24,3 +24,6 @@ Thumbs.db
 .vscode/
 .idea/
 .gstack/
+
+# Large source workbook for the importer registry (slim parquet is committed instead)
+MajorImportersbyHS6byCountry2023.xlsx

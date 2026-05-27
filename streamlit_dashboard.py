@@ -30,6 +30,7 @@ HS4_PRIORITY_FILE = ROOT / "hs_priority_4"
 HS6_PRIORITY_FILE = ROOT / "hs_priority_6.md"
 CATEGORIZATION_FILE = ROOT / "categorization.md"
 EQUIPMENT_CATEGORIES_FILE = ROOT / "equipment_categories.md"
+MAJOR_IMPORTERS_PARQUET = ROOT / "cimt_output" / "major_importers.parquet"
 LOGO_PATH = ROOT / "assets" / "transition_accelerator.png"
 CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 
@@ -301,6 +302,30 @@ def _inject_global_css():
         }
         </style>
         """,
+        unsafe_allow_html=True,
+    )
+
+
+def _excel_download(data_bytes: bytes, filename: str, label: str):
+    """Right-aligned download link styled as a button, with an Excel-style green
+    mark (embedded SVG) rather than a generic download glyph."""
+    excel_svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+        "<rect x='3' y='5' width='26' height='22' rx='3' fill='#1D6F42'/>"
+        "<path d='M12 11 L20 21 M20 11 L12 21' stroke='#fff' "
+        "stroke-width='2.6' stroke-linecap='round'/></svg>"
+    )
+    icon_uri = base64.b64encode(excel_svg.encode()).decode()
+    data_uri = base64.b64encode(data_bytes).decode()
+    st.markdown(
+        f"<div style='text-align:right;margin:-4px 0 8px;'>"
+        f"<a href='data:text/csv;base64,{data_uri}' download='{filename}' "
+        f"style='display:inline-flex;align-items:center;gap:8px;"
+        f"text-decoration:none;border:1px solid #d0d4d9;border-radius:8px;"
+        f"padding:6px 14px;background:#fff;color:#1f2937;font-size:14px;"
+        f"font-weight:600;'>"
+        f"<img src='data:image/svg+xml;base64,{icon_uri}' width='18' "
+        f"height='18' style='vertical-align:middle'/>{label}</a></div>",
         unsafe_allow_html=True,
     )
 
@@ -796,30 +821,7 @@ def _render_main_view(
     export_name = (
         f"cimt_{sel_flow}_{year_label}.csv".replace("–", "-").replace(" ", "")
     )
-    # Right-aligned download link styled as a button, with an Excel-style green
-    # mark (embedded SVG) rather than a generic download glyph.
-    excel_svg = (
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
-        "<rect x='3' y='5' width='26' height='22' rx='3' fill='#1D6F42'/>"
-        "<path d='M12 11 L20 21 M20 11 L12 21' stroke='#fff' "
-        "stroke-width='2.6' stroke-linecap='round'/></svg>"
-    )
-    icon_uri = base64.b64encode(excel_svg.encode()).decode()
-    data_uri = base64.b64encode(export_csv).decode()
-    st.markdown(
-        f"<div style='text-align:right;margin:-4px 0 8px;'>"
-        f"<a href='data:text/csv;base64,{data_uri}' download='{export_name}' "
-        f"title='Exports every row matching the current trade flow, "
-        f"HS/category, year and CAD-basis filters' "
-        f"style='display:inline-flex;align-items:center;gap:8px;"
-        f"text-decoration:none;border:1px solid #d0d4d9;border-radius:8px;"
-        f"padding:6px 14px;background:#fff;color:#1f2937;font-size:14px;"
-        f"font-weight:600;'>"
-        f"<img src='data:image/svg+xml;base64,{icon_uri}' width='18' "
-        f"height='18' style='vertical-align:middle'/>"
-        f"Download filtered data (CSV)</a></div>",
-        unsafe_allow_html=True,
-    )
+    _excel_download(export_csv, export_name, "Download filtered data (CSV)")
 
     agg = (
         view.groupby(["country", "country_name"], as_index=False, dropna=False)["value_cad"]
@@ -1980,6 +1982,115 @@ def page_categorization():
         st.divider()
 
 
+@st.cache_data
+def load_major_importers() -> pd.DataFrame:
+    """Slim importer registry (focus HS-6 codes only) from major_importers.parquet."""
+    if not MAJOR_IMPORTERS_PARQUET.exists():
+        return pd.DataFrame()
+    return pd.read_parquet(MAJOR_IMPORTERS_PARQUET)
+
+
+def page_major_importers():
+    st.title("Major importers")
+    imp = load_major_importers()
+    if imp.empty:
+        st.error(
+            "Importer data not found. Expected "
+            f"`{MAJOR_IMPORTERS_PARQUET.relative_to(ROOT)}` — regenerate it from "
+            "the Canadian Importers Database workbook."
+        )
+        st.stop()
+
+    yr = int(imp["year"].dropna().max()) if imp["year"].notna().any() else ""
+    st.markdown(
+        f"Companies that imported the focused grid-equipment HS-6 codes into "
+        f"Canada in **{yr}**, by country of origin and importer location. "
+        "Source: StatCan Canadian Importers Database. Filter by equipment "
+        "category, HS-6, origin country, or company name."
+    )
+
+    # HS-6 descriptions from the trade data.
+    trade = load_data(_data_file_signature())
+    hd = trade[["hs6", "hs_description"]].dropna(subset=["hs6"]).drop_duplicates("hs6")
+    hs6_desc = dict(zip(hd["hs6"], hd["hs_description"].fillna("")))
+
+    # Category type → the HS-6 codes it covers that exist in the importer data.
+    cats = load_equipment_categories(EQUIPMENT_CATEGORIES_FILE)
+    present = set(imp["hs6"].unique())
+    cat_hs6 = {
+        c["name"]: (c["hs6"] | {f[:6] for f in c["full"]}) & present for c in cats
+    }
+    cat_hs6 = {k: v for k, v in cat_hs6.items() if v}
+
+    with st.sidebar:
+        st.header("Filters")
+        sel_cats = st.multiselect(
+            "Category type",
+            list(cat_hs6),
+            help="Restrict to the HS-6 codes in the chosen grid-equipment "
+            "categories. Leave empty for all focus codes.",
+        )
+        scope = (
+            set().union(*[cat_hs6[c] for c in sel_cats]) if sel_cats else present
+        )
+        sel_hs6 = st.multiselect(
+            "HS-6 code",
+            sorted(scope),
+            format_func=lambda c: f"{c} — {hs6_desc.get(c, '')}",
+        )
+        hs6_filter = set(sel_hs6) if sel_hs6 else scope
+        countries = sorted(
+            imp.loc[imp["hs6"].isin(hs6_filter), "country"].dropna().unique()
+        )
+        sel_countries = st.multiselect("Country of origin", countries)
+        company_q = st.text_input("Company name contains")
+
+    view = imp[imp["hs6"].isin(hs6_filter)]
+    if sel_countries:
+        view = view[view["country"].isin(sel_countries)]
+    if company_q.strip():
+        view = view[
+            view["company"].str.contains(company_q.strip(), case=False, na=False)
+        ]
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Companies", f"{view['company'].nunique():,}")
+    m2.metric("Origin countries", f"{view['country'].nunique():,}")
+    m3.metric("HS-6 codes", f"{view['hs6'].nunique():,}")
+    m4.metric("Records", f"{len(view):,}")
+
+    if view.empty:
+        st.info("No importers match the current filters.")
+        st.stop()
+
+    disp = view.copy()
+    disp["description"] = disp["hs6"].map(hs6_desc)
+    disp = disp[
+        ["hs6", "description", "company", "country", "province", "city"]
+    ].rename(
+        columns={
+            "hs6": "HS-6",
+            "description": "Description",
+            "company": "Company",
+            "country": "Imported from",
+            "province": "Province",
+            "city": "City",
+        }
+    )
+
+    fname = "major_importers"
+    if sel_cats:
+        fname += "_" + "_".join(
+            "".join(ch for ch in c if ch.isalnum())[:12] for c in sel_cats
+        )
+    _excel_download(
+        disp.to_csv(index=False).encode("utf-8-sig"),
+        f"{fname}.csv",
+        "Download importer list (CSV)",
+    )
+    st.dataframe(disp, hide_index=True, use_container_width=True, height=560)
+
+
 def run():
     """Multipage entry point: page config + shared CSS, then navigation."""
     st.set_page_config(
@@ -1995,6 +2106,7 @@ def run():
                 title="Equipment Categorization",
                 icon="🗂️",
             ),
+            st.Page(page_major_importers, title="Major importers", icon="🏭"),
         ]
     )
     nav.run()
