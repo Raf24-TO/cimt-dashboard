@@ -889,10 +889,10 @@ def _render_main_view(
     c3.metric(partner_plural, f"{(agg['value_cad'] > 0).sum():,}")
     c4.metric("Year", year_label)
 
-    # Selected-code tree: each HS-6 with its detail (HS-10/HS-8) children
-    # indented beneath — included codes in green, then an "Excluded" sub-list
-    # in red for any dropped by the category carve-out (or a manual HS-10 pick),
-    # so what's actually counted vs. dropped is explicit.
+    # Selected-code list: each HS-6 with its detail (HS-10/HS-8) children listed
+    # flush-left — included codes in green, then an "Excluded" sub-list in red
+    # for any dropped by the category carve-out (or a manual HS-10 pick), so
+    # what's actually counted vs. dropped is explicit.
     if sel_hs:
         detail_kind = "HS-10" if sel_flow == "imports" else "HS-8"
         manual = set(sel_hs_full)
@@ -914,18 +914,18 @@ def _render_main_view(
             for c in incl:
                 n_incl += 1
                 rows.append(
-                    f"<div style='margin-left:22px;color:#157347'>"
+                    f"<div style='margin-left:16px;color:#157347'>"
                     f"{c} — {html.escape(hs10_desc.get(c, ''))}</div>"
                 )
             if excl:
                 rows.append(
-                    "<div style='margin-left:22px;margin-top:2px;color:#888;"
+                    "<div style='margin-left:16px;margin-top:2px;color:#888;"
                     "font-size:12px;font-weight:600'>Excluded</div>"
                 )
                 for c in excl:
                     n_excl += 1
                     rows.append(
-                        f"<div style='margin-left:34px;color:#c0392b'>"
+                        f"<div style='margin-left:16px;color:#c0392b'>"
                         f"{c} — {html.escape(hs10_desc.get(c, ''))}</div>"
                     )
         label = f"Selected codes — {len(sel_hs)} HS-6"
