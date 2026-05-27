@@ -12,6 +12,7 @@ Run:
 
 from pathlib import Path
 import math
+import re
 
 import folium
 import pandas as pd
@@ -26,6 +27,7 @@ COORDS_CSV = ROOT / "country_coords.csv"
 HS4_PRIORITY_FILE = ROOT / "hs_priority_4"
 HS6_PRIORITY_FILE = ROOT / "hs_priority_6.md"
 CATEGORIZATION_FILE = ROOT / "categorization.md"
+EQUIPMENT_CATEGORIES_FILE = ROOT / "equipment_categories.md"
 LOGO_PATH = ROOT / "assets" / "transition_accelerator.png"
 CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 
@@ -169,35 +171,44 @@ def load_hs_priority(path: Path) -> tuple[list[str], dict[str, str]]:
 
 
 @st.cache_data
-def load_categorization(path: Path) -> list[dict]:
-    """Parse categorization.md into [{tier, hs4, label}] entries.
+def load_equipment_categories(path: Path) -> list[dict]:
+    """Parse equipment_categories.md into grid-equipment categories.
 
-    Recognizes ``## <Tier name>: ...`` headings and the first two columns of
-    each markdown table row beneath them (HS-4 code + plain-English label).
+    Each ``## N. <Category Name>`` heading starts a category; the first column
+    of every markdown table row beneath it holds an HS code. Codes are
+    classified by length:
+      * 6 digits  → whole HS-6 (every detail code under it belongs)
+      * 8/10 digits → an HS-8 / HS-10 carve-out (only that detail code belongs)
+
+    Returns ``[{"name", "hs6": set, "full": set}]``. Non-numbered headings
+    (e.g. the "⚠ Flagged" review tables) are ignored so flagged codes aren't
+    double-counted.
     """
     if not path.exists():
         return []
     out: list[dict] = []
-    current_tier: str | None = None
+    cur: dict | None = None
+    head_re = re.compile(r"^##\s+\d+\.\s+(.+?)\s*$")
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
-        if line.startswith("## ") and not line.startswith("###"):
-            title = line[3:].strip()
-            if title.lower().startswith("notes"):
-                current_tier = None
-                continue
-            current_tier = title.split(":", 1)[0].strip()
+        if line.startswith("## "):
+            m = head_re.match(line)
+            if m:
+                cur = {"name": m.group(1).strip(), "hs6": set(), "full": set()}
+                out.append(cur)
+            else:
+                cur = None  # flag/notes section — stop collecting codes
             continue
-        if not current_tier or not line.startswith("|"):
+        if cur is None or not line.startswith("|"):
             continue
-        cols = [c.strip() for c in line.strip("|").split("|")]
-        if len(cols) < 2:
+        code = line.strip("|").split("|")[0].strip().replace(" ", "")
+        if not code.isdigit():
             continue
-        code = cols[0].replace(" ", "")
-        if not code.isdigit() or len(code) < 4:
-            continue
-        out.append({"tier": current_tier, "hs4": code, "label": cols[1]})
-    return out
+        if len(code) == 6:
+            cur["hs6"].add(code)
+        elif len(code) in (8, 10):
+            cur["full"].add(code)
+    return [c for c in out if c["hs6"] or c["full"]]
 
 
 def fmt_cad(v: float) -> str:
@@ -382,16 +393,19 @@ def main():
     hs4_in_data = sorted({c[:4] for c in all_hs6})
     hs4_codes = [c for c in hs4_codes if c in hs4_in_data] or hs4_in_data
 
-    # Plain-English categories from categorization.md, scoped to HS-4 codes
-    # that actually appear in the data.
+    # Grid-equipment categories from equipment_categories.md. Each maps to a
+    # set of whole HS-6 codes plus (for transformers / converters) specific
+    # HS-10 / HS-8 carve-outs. Keep only categories that touch a code present
+    # in the current flow's data.
+    hs6_in_data = set(all_hs6)
     categories = [
-        c for c in load_categorization(CATEGORIZATION_FILE) if c["hs4"] in set(hs4_in_data)
+        c for c in load_equipment_categories(EQUIPMENT_CATEGORIES_FILE)
+        if (c["hs6"] & hs6_in_data) or {f[:6] for f in c["full"]} & hs6_in_data
     ]
-    cat_to_hs4 = {c["label"]: c["hs4"] for c in categories}
-    cat_to_tier = {c["label"]: c["tier"] for c in categories}
+    cat_by_name = {c["name"]: c for c in categories}
 
     # ------------------------------------------------------------------
-    # Sidebar — pass 2: per-flow filters (Tier, Category, HS-4, HS-6,
+    # Sidebar — pass 2: per-flow filters (Category, HS-4, HS-6,
     # HS-10, Year, etc.).
     # ------------------------------------------------------------------
     with st.sidebar:
@@ -414,41 +428,22 @@ def main():
                 st.session_state[prev_key] = new_sel
             return _cb
 
-        # ---- Tier filter ------------------------------------------------
-        tiers_avail = sorted({c["tier"] for c in categories})
-        if "tier_select" not in st.session_state:
-            st.session_state["tier_select"] = [ALL]
-        sel_tiers_raw = st.multiselect(
-            "Tier",
-            options=[ALL] + tiers_avail,
-            key="tier_select",
-            on_change=_make_all_or_specific_callback("tier_select", "tier_prev"),
-            help=(
-                "High-level grouping from categorization.md. "
-                "Filters the Category list below."
-            ),
-        )
-        st.session_state.setdefault("tier_prev", list(sel_tiers_raw))
-        if ALL in sel_tiers_raw or not sel_tiers_raw:
-            sel_tiers = set(tiers_avail)
-        else:
-            sel_tiers = {t for t in sel_tiers_raw if t != ALL}
-
-        # ---- Category filter (scoped by Tier) ---------------------------
-        visible_categories = [c for c in categories if c["tier"] in sel_tiers]
+        # ---- Equipment-category filter ----------------------------------
         if "category_select" not in st.session_state:
             st.session_state["category_select"] = [ALL]
         sel_categories_raw = st.multiselect(
             "Category",
-            options=[ALL] + [c["label"] for c in visible_categories],
+            options=[ALL] + [c["name"] for c in categories],
             format_func=lambda c: c,
             key="category_select",
             on_change=_make_all_or_specific_callback(
                 "category_select", "category_prev"
             ),
             help=(
-                "Grid-equipment categories. Pick one or several — the "
-                "matching HS-4 codes are used automatically."
+                "Grid-equipment categories. Pick one or several — the matching "
+                "HS codes are selected automatically. A few categories resolve "
+                "to specific HS-10/HS-8 detail codes (e.g. Large Power "
+                "Transformer = >100 MVA only); the view notes when that happens."
             ),
         )
         st.session_state.setdefault("category_prev", list(sel_categories_raw))
@@ -458,47 +453,45 @@ def main():
         else:
             sel_categories = [c for c in sel_categories_raw if c != ALL]
 
-        # HS-4 codes present in the current tier scope. When the user picks
-        # specific tiers without further narrowing by Category, this set
-        # bounds the rest of the cascade so the Tier filter actually
-        # reaches the data (and isn't only cosmetic on the Category list).
-        tier_scoped_hs4_set = {c["hs4"] for c in visible_categories}
-        tier_is_narrowed = sel_tiers != set(tiers_avail)
+        # Resolve selected categories → whole HS-6 codes + HS-10/HS-8 carve-outs.
+        # full_restrict[hs6] = the only detail codes allowed for that HS-6.
+        whole_hs6: set[str] = set()
+        full_restrict: dict[str, set[str]] = {}
+        for name in sel_categories:
+            cat = cat_by_name.get(name, {})
+            whole_hs6 |= cat.get("hs6", set())
+            for f in cat.get("full", set()):
+                full_restrict.setdefault(f[:6], set()).add(f)
+        # A parent that's whole in any category wins — drop its restriction.
+        for h in list(full_restrict):
+            if h in whole_hs6:
+                del full_restrict[h]
+        touched_hs6 = whole_hs6 | set(full_restrict)
 
         if sel_categories:
-            selected_hs4_set = {cat_to_hs4[c] for c in sel_categories}
             sel_hs4 = ALL  # individual HS-4 picker is hidden when categories rule
-            codes_str = ", ".join(f"`{h}`" for h in sorted(selected_hs4_set))
+            hs4_str = ", ".join(f"`{h}`" for h in sorted({c[:4] for c in touched_hs6}))
             st.markdown(
                 f"<div style='color:#444;font-size:13px;margin:4px 0 8px;'>"
-                f"<b>HS-4:</b> {codes_str} "
+                f"<b>HS-4:</b> {hs4_str} "
                 f"<span style='color:#888;'>(from {len(sel_categories)} "
                 f"categor{'ies' if len(sel_categories) != 1 else 'y'})</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
         else:
-            selected_hs4_set = None
-            hs4_picker_options = (
-                [c for c in hs4_codes if c in tier_scoped_hs4_set]
-                if tier_is_narrowed else hs4_codes
-            )
             sel_hs4 = st.selectbox(
                 "HS-4 (heading)",
-                options=[ALL] + hs4_picker_options,
+                options=[ALL] + hs4_codes,
                 format_func=lambda c: c if c == ALL else f"{c} — {hs4_desc.get(c, '')}",
             )
 
-        # HS-6 options scoped by either the categories' HS-4 set, the
-        # individual HS-4 picker, or — when neither is narrowed — the
-        # tier scope.
-        if selected_hs4_set:
-            visible_hs6 = [c for c in all_hs6 if c[:4] in selected_hs4_set]
+        # HS-6 options scoped by the selected categories, the individual HS-4
+        # picker, or — when neither is narrowed — all codes.
+        if sel_categories:
+            visible_hs6 = [c for c in all_hs6 if c in touched_hs6]
         elif sel_hs4 == ALL:
-            if tier_is_narrowed:
-                visible_hs6 = [c for c in all_hs6 if c[:4] in tier_scoped_hs4_set]
-            else:
-                visible_hs6 = all_hs6
+            visible_hs6 = all_hs6
         else:
             visible_hs6 = [c for c in all_hs6 if c.startswith(sel_hs4)]
 
@@ -657,9 +650,12 @@ def main():
         f"{min(sel_years)}–{max(sel_years)}" if len(sel_years) > 1 else str(sel_years[0])
     )
 
+    # Only carry restrictions for HS-6 codes still in the selection.
+    active_restrict = {h: f for h, f in full_restrict.items() if h in sel_hs}
+
     _render_main_view(
         df, coords, hs6_desc, hs10_desc, sel_years, sel_hs, sel_hs_full,
-        year_label, top_n, log_size, sel_flow,
+        year_label, top_n, log_size, sel_flow, active_restrict,
     )
 
     st.markdown(
@@ -680,13 +676,19 @@ def main():
 
 def _render_main_view(
     df, coords, hs6_desc, hs10_desc, sel_years, sel_hs, sel_hs_full,
-    year_label, top_n, log_size, sel_flow,
+    year_label, top_n, log_size, sel_flow, full_restrict=None,
 ):
     """Unified trade view (Value + Quantity). Origin breakdown shows quantity
     alongside value when the current filter narrows to one CIMT unit. The
     optional sel_hs_full list narrows further to specific HS-10 / HS-8 codes.
     sel_flow labels the flow ('imports', 'domestic_exports', ...) for label
-    text and the map's Canada role."""
+    text and the map's Canada role.
+
+    full_restrict maps an HS-6 code → the only HS-10/HS-8 detail codes that
+    belong to the selected category (e.g. {'850423': {'8504230030'}} for Large
+    Power Transformer). Such HS-6 codes are included only for those detail
+    codes; everything else is taken whole."""
+    full_restrict = full_restrict or {}
     flow_noun = FLOW_NOUN.get(sel_flow, "trade")
     partner_noun = PARTNER_NOUN.get(sel_flow, "partner")
     partner_plural = partner_noun.capitalize() + " countries"
@@ -705,12 +707,47 @@ def _render_main_view(
     )
     basis_label = "nominal CAD" if cad_basis == NOMINAL_BASIS else "2025 CAD"
 
-    # Optional HS-10 narrowing layered on top of the HS-6 filter. Used in every
-    # downstream filter (headline, deflation, bar chart) so the entire view
-    # stays consistent.
-    hs_mask = df["hs6"].isin(sel_hs)
+    # Build the HS mask. Each selected HS-6 is taken whole unless a category
+    # restricts it to specific HS-10/HS-8 detail codes (full_restrict), in
+    # which case only those rows count. Used in every downstream filter
+    # (headline, deflation, bar chart) so the entire view stays consistent.
+    hs_mask = pd.Series(False, index=df.index)
+    for h in sel_hs:
+        part = df["hs6"] == h
+        if h in full_restrict:
+            part = part & df["hs_full"].isin(full_restrict[h])
+        hs_mask = hs_mask | part
+    # Manual HS-10 picker (single HS-6) narrows further still.
     if sel_hs_full:
         hs_mask = hs_mask & df["hs_full"].isin(sel_hs_full)
+
+    # Surface any category-driven HS-10/HS-8 carve-out so the scope is explicit
+    # (e.g. "Large Power Transformer → only the >100 MVA detail code").
+    for h in sel_hs:
+        if h not in full_restrict:
+            continue
+        children = set(df.loc[df["hs6"] == h, "hs_full"].dropna().unique())
+        if not children:
+            continue
+        included = full_restrict[h] & children
+        detail = "HS-10" if sel_flow == "imports" else "HS-8"
+        if not included:
+            st.warning(
+                f"⚠ The selected category restricts **{h}** "
+                f"({hs6_desc.get(h, '')}) to detail codes that don't exist for "
+                f"**{FLOW_LABELS.get(sel_flow, sel_flow)}** — there is no data "
+                f"for this code under the current trade flow. (This detail is "
+                f"reported on the import side only.)"
+            )
+        elif included != children:
+            codes_txt = ", ".join(
+                f"`{c}` — {hs10_desc.get(c, '')[:48]}" for c in sorted(included)
+            )
+            st.caption(
+                f"ℹ **{h}** ({hs6_desc.get(h, '')}) is scoped by the selected "
+                f"category to {len(included)} of {len(children)} {detail} detail "
+                f"code(s): {codes_txt}."
+            )
 
     # ------------------------------------------------------------------
     # Filter & aggregate
