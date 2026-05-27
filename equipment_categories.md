@@ -148,9 +148,10 @@ controllers ($1.7B) — all non-grid.
 |------|-------------|-----------|
 | 853530 | Isolating switches and make-and-break switches, >1,000 V | Exactly disconnect/isolator switches at HV/MV. Clean fit. |
 
-## 11. Raw Materials (formerly "Critical Inputs")
+## 11. Raw Materials
 
-Upstream materials and components feeding manufacture of the equipment above.
+Upstream materials and components feeding manufacture of the equipment above
+(formerly labelled "Critical Inputs").
 
 | HS-6 | Description | Reasoning |
 |------|-------------|-----------|

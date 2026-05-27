@@ -11,6 +11,8 @@ Run:
 """
 
 from pathlib import Path
+import base64
+import html
 import math
 import re
 
@@ -221,16 +223,11 @@ def fmt_cad(v: float) -> str:
     return f"CAD ${v:,.0f}"
 
 
-def main():
-    st.set_page_config(
-        page_title="Strengthening Canada's Grid Equipment Supply Chain",
-        layout="wide",
-    )
-
-    # Allow long filter labels (Category / HS-4 / HS-6) to wrap onto multiple
-    # lines instead of being truncated with ellipsis. BaseWeb's option items
-    # nest the text in inner <div>s with their own white-space/overflow rules,
-    # so we have to override the descendants too.
+def _inject_global_css():
+    """Shared styling for every page: let long filter labels wrap instead of
+    truncating, trim the main container's bottom padding, and scale type down
+    on 13" laptops. BaseWeb nests option text in inner <div>s with their own
+    white-space/overflow rules, so the descendants are overridden too."""
     st.markdown(
         """
         <style>
@@ -307,6 +304,8 @@ def main():
         unsafe_allow_html=True,
     )
 
+
+def page_dashboard():
     st.title("Strengthening Canada's Grid Equipment Supply Chain")
 
     if not LONG_PARQUET.exists() and not LONG_CSV.exists():
@@ -525,15 +524,27 @@ def main():
             hs10_options = sorted(
                 code for code, parent in hs10_to_hs6.items() if parent == single_hs6
             )
+            # When a category carves this HS-6 down to specific detail codes,
+            # the picker should only offer those — otherwise "All" would imply
+            # the full HS-6 even though the view is already restricted.
+            restricted = single_hs6 in full_restrict
+            if restricted:
+                hs10_options = [c for c in hs10_options if c in full_restrict[single_hs6]]
             # Imports expose 10-digit codes; domestic exports only 8-digit.
             detail_level = "HS-10" if sel_flow == "imports" else "HS-8"
+            restrict_note = (
+                " Limited to the detail codes that belong to the selected "
+                "category." if restricted else ""
+            )
             if len(hs10_options) > 1:
                 if "hs10_select" not in st.session_state:
                     st.session_state["hs10_select"] = [ALL]
+                all_label = "All (in category)" if restricted else ALL
                 sel_hs10_raw = st.multiselect(
                     f"{detail_level} (detail)",
                     options=[ALL] + hs10_options,
-                    format_func=lambda c: c if c == ALL else f"{c} — {hs10_desc.get(c, '')}",
+                    format_func=lambda c: all_label if c == ALL
+                    else f"{c} — {hs10_desc.get(c, '')}",
                     key="hs10_select",
                     on_change=_make_all_or_specific_callback(
                         "hs10_select", "hs10_prev"
@@ -542,6 +553,7 @@ def main():
                         f"CIMT splits each HS-6 into one or more {detail_level} "
                         "codes (Canada-specific sub-classifications). Pick one "
                         "or several to narrow the view, or leave on 'All'."
+                        + restrict_note
                     ),
                 )
                 st.session_state.setdefault("hs10_prev", list(sel_hs10_raw))
@@ -559,6 +571,7 @@ def main():
                 only = hs10_options[0]
                 st.caption(
                     f"{detail_level}: **{only}** — {hs10_desc.get(only, '')[:60]}"
+                    + ("  ·  fixed by category" if restricted else "")
                 )
 
         CUSTOM_RANGE = "Custom range…"
@@ -768,6 +781,46 @@ def _render_main_view(
                 f"{', '.join(str(y) for y in uncovered)} are shown at nominal CAD."
             )
 
+    # Download the exact filtered rows as CSV — reflects the flow, HS/category,
+    # year and CAD-basis selections currently in effect.
+    export_cols = [
+        c for c in [
+            "year", "flow", "hs6", "hs_description", "hs_full",
+            "hs_full_description", "country", "country_name",
+            "quantity_1", "unit_1", "value_cad",
+        ] if c in view.columns
+    ]
+    export_df = view[export_cols].copy()
+    export_df.insert(0, "cad_basis", basis_label)
+    export_csv = export_df.to_csv(index=False).encode("utf-8-sig")
+    export_name = (
+        f"cimt_{sel_flow}_{year_label}.csv".replace("–", "-").replace(" ", "")
+    )
+    # Right-aligned download link styled as a button, with an Excel-style green
+    # mark (embedded SVG) rather than a generic download glyph.
+    excel_svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+        "<rect x='3' y='5' width='26' height='22' rx='3' fill='#1D6F42'/>"
+        "<path d='M12 11 L20 21 M20 11 L12 21' stroke='#fff' "
+        "stroke-width='2.6' stroke-linecap='round'/></svg>"
+    )
+    icon_uri = base64.b64encode(excel_svg.encode()).decode()
+    data_uri = base64.b64encode(export_csv).decode()
+    st.markdown(
+        f"<div style='text-align:right;margin:-4px 0 8px;'>"
+        f"<a href='data:text/csv;base64,{data_uri}' download='{export_name}' "
+        f"title='Exports every row matching the current trade flow, "
+        f"HS/category, year and CAD-basis filters' "
+        f"style='display:inline-flex;align-items:center;gap:8px;"
+        f"text-decoration:none;border:1px solid #d0d4d9;border-radius:8px;"
+        f"padding:6px 14px;background:#fff;color:#1f2937;font-size:14px;"
+        f"font-weight:600;'>"
+        f"<img src='data:image/svg+xml;base64,{icon_uri}' width='18' "
+        f"height='18' style='vertical-align:middle'/>"
+        f"Download filtered data (CSV)</a></div>",
+        unsafe_allow_html=True,
+    )
+
     agg = (
         view.groupby(["country", "country_name"], as_index=False, dropna=False)["value_cad"]
         .sum()
@@ -836,21 +889,56 @@ def _render_main_view(
     c3.metric(partner_plural, f"{(agg['value_cad'] > 0).sum():,}")
     c4.metric("Year", year_label)
 
-    # Show selected HS code descriptions (count surfaced in the expander
-    # label since the headline metric row was reduced from 4 → 3 cells).
+    # Selected-code tree: each HS-6 with its detail (HS-10/HS-8) children
+    # indented beneath — included codes in green, then an "Excluded" sub-list
+    # in red for any dropped by the category carve-out (or a manual HS-10 pick),
+    # so what's actually counted vs. dropped is explicit.
     if sel_hs:
-        label_count = len(sel_hs_full) if sel_hs_full else len(sel_hs)
-        if sel_hs_full:
-            label_kind = "HS-10" if sel_flow == "imports" else "HS-8"
-        else:
-            label_kind = "HS-6"
-        with st.expander(f"Selected {label_kind} codes ({label_count})"):
-            if sel_hs_full:
-                for c in sel_hs_full:
-                    st.markdown(f"- **{c}** — {hs10_desc.get(c, '')}")
-            else:
-                for c in sel_hs:
-                    st.markdown(f"- **{c}** — {hs6_desc.get(c, '')}")
+        detail_kind = "HS-10" if sel_flow == "imports" else "HS-8"
+        manual = set(sel_hs_full)
+        rows: list[str] = []
+        n_incl = n_excl = 0
+        for h in sel_hs:
+            rows.append(
+                f"<div style='margin-top:6px'><b>{h}</b> — "
+                f"{html.escape(hs6_desc.get(h, ''))}</div>"
+            )
+            children = sorted(df.loc[df["hs6"] == h, "hs_full"].dropna().unique())
+            allowed = set(children)
+            if h in full_restrict:
+                allowed &= full_restrict[h]
+            if manual:  # manual HS-10 narrowing (single-HS-6 case)
+                allowed &= manual
+            incl = [c for c in children if c in allowed]
+            excl = [c for c in children if c not in allowed]
+            for c in incl:
+                n_incl += 1
+                rows.append(
+                    f"<div style='margin-left:22px;color:#157347'>"
+                    f"{c} — {html.escape(hs10_desc.get(c, ''))}</div>"
+                )
+            if excl:
+                rows.append(
+                    "<div style='margin-left:22px;margin-top:2px;color:#888;"
+                    "font-size:12px;font-weight:600'>Excluded</div>"
+                )
+                for c in excl:
+                    n_excl += 1
+                    rows.append(
+                        f"<div style='margin-left:34px;color:#c0392b'>"
+                        f"{c} — {html.escape(hs10_desc.get(c, ''))}</div>"
+                    )
+        label = f"Selected codes — {len(sel_hs)} HS-6"
+        if n_excl:
+            label += f" · {n_incl} {detail_kind} included, {n_excl} excluded"
+        elif n_incl:
+            label += f" · {n_incl} {detail_kind}"
+        with st.expander(label):
+            st.markdown(
+                "<div style='font-size:13px;line-height:1.45'>"
+                + "".join(rows) + "</div>",
+                unsafe_allow_html=True,
+            )
 
     # ------------------------------------------------------------------
     # Build map
@@ -1693,5 +1781,224 @@ def _render_yoy_table(rows: pd.DataFrame, *, show_transition_header: bool = True
     )
 
 
+@st.cache_data
+def _category_entries(path: Path) -> list[dict]:
+    """Parse equipment_categories.md into per-category rows.
+
+    Returns ``[{name, intro, rows:[{code, desc, reason, flagged}]}]`` for each
+    numbered ``## N. Name`` category. ``flagged`` is true when the reasoning
+    carries a ⚠ / FLAG marker. The dev-facing appendix sections are skipped."""
+    if not path.exists():
+        return []
+    head_re = re.compile(r"^##\s+\d+\.\s+(.+?)\s*$")
+    cats: list[dict] = []
+    cur: dict | None = None
+    cols: dict | None = None
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            m = head_re.match(line)
+            cur = {"name": m.group(1).strip(), "intro": [], "rows": []} if m else None
+            cols = None
+            if m:
+                cats.append(cur)
+            continue
+        if cur is None:
+            continue
+        if not line.startswith("|"):
+            if line and cols is None:  # intro paragraph (before the table)
+                cur["intro"].append(line)
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        low = [c.lower() for c in cells]
+        if cols is None and any("description" in c for c in low):  # header row
+            cols = {
+                "desc": next((i for i, c in enumerate(low) if "description" in c), 1),
+                "reason": next(
+                    (i for i, c in enumerate(low) if "reason" in c), len(cells) - 1
+                ),
+            }
+            continue
+        if all(set(c) <= set("-: ") for c in cells if c):  # separator row
+            continue
+        code = cells[0].replace(" ", "")
+        if not code.isdigit():
+            continue
+        di = (cols or {}).get("desc", 1)
+        ri = (cols or {}).get("reason", len(cells) - 1)
+        desc = cells[di] if di < len(cells) else ""
+        reason = cells[ri] if ri < len(cells) else ""
+        flagged = ("⚠" in reason) or ("FLAG" in reason.upper())
+        cur["rows"].append(
+            {"code": code, "desc": desc, "reason": reason, "flagged": flagged}
+        )
+    return [c for c in cats if c["rows"]]
+
+
+def page_categorization():
+    st.title("Equipment Categorization")
+    st.markdown(
+        "Every HS code is assigned to one grid-equipment category, laid out as a "
+        "**HS-4 → HS-6 → HS-10** hierarchy. Most codes map at the HS-6 level (all "
+        "their HS-10 detail codes belong); a few — large transformers and HVDC "
+        "converters — are pinned to specific HS-10/HS-8 codes so the category "
+        "captures only the grid-relevant slice. "
+        "<span style='color:#c0392b;font-weight:600'>Forced or weak fits are "
+        "shown in red.</span>",
+        unsafe_allow_html=True,
+    )
+
+    cats = load_equipment_categories(EQUIPMENT_CATEGORIES_FILE)
+    entries = _category_entries(EQUIPMENT_CATEGORIES_FILE)
+    if not cats or not entries:
+        st.error(
+            f"Categorization file not found or empty: {EQUIPMENT_CATEGORIES_FILE.name}"
+        )
+        st.stop()
+
+    n_hs6 = len(
+        set().union(*[c["hs6"] for c in cats])
+        | {f[:6] for c in cats for f in c["full"]}
+    )
+    n_carve = len({f for c in cats for f in c["full"]})
+    n_flag = sum(1 for e in entries for r in e["rows"] if r["flagged"])
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Categories", len(cats))
+    c2.metric("HS-6 codes", n_hs6)
+    c3.metric("HS-10/HS-8 carve-outs", n_carve)
+    c4.metric("Flagged", n_flag)
+
+    # Data for HS-10 detail children + descriptions (imports expose 10-digit).
+    df_all = load_data(_data_file_signature())
+    imp = df_all[df_all["flow"] == "imports"] if "flow" in df_all.columns else df_all
+    hs6_to_detail: dict[str, list] = {}
+    ch = (
+        imp[["hs6", "hs_full", "hs_full_description"]]
+        .dropna(subset=["hs_full"])
+        .drop_duplicates("hs_full")
+    )
+    for r in ch.itertuples(index=False):
+        hs6_to_detail.setdefault(r.hs6, []).append(
+            (r.hs_full, r.hs_full_description or "")
+        )
+    for k in hs6_to_detail:
+        hs6_to_detail[k].sort()
+    hd = df_all[["hs6", "hs_description"]].dropna(subset=["hs6"]).drop_duplicates("hs6")
+    hs6_desc = dict(zip(hd["hs6"], hd["hs_description"].fillna("")))
+    _, hs4_desc = load_hs_priority(HS4_PRIORITY_FILE)
+
+    names = [e["name"] for e in entries]
+    pick = st.selectbox("Jump to category", ["All categories"] + names)
+    st.divider()
+
+    RED, DARK, MUTED, BLUE = "#c0392b", "#1f2937", "#6b7280", "#1f3a68"
+    esc = html.escape
+
+    for e in entries:
+        if pick != "All categories" and e["name"] != pick:
+            continue
+        st.header(e["name"])
+        intro = " ".join(e["intro"]).strip()
+        if intro:
+            st.caption(intro)
+
+        # Group rows into HS-4 → HS-6 → {whole assignment, carve-out details}.
+        tree: dict[str, dict[str, dict]] = {}
+        for r in e["rows"]:
+            code = r["code"]
+            node = tree.setdefault(code[:4], {}).setdefault(
+                code[:6], {"whole": None, "carve": []}
+            )
+            if len(code) == 6:
+                node["whole"] = r
+            else:
+                node["carve"].append(r)
+
+        rows = [
+            "<tr style='border-bottom:2px solid #d0d0d0;text-align:left'>"
+            "<th style='padding:6px 10px'>HS code</th>"
+            "<th style='padding:6px 10px'>Description</th>"
+            "<th style='padding:6px 10px'>Notes</th></tr>"
+        ]
+        for hs4 in sorted(tree):
+            h4d = hs4_desc.get(hs4, "")
+            rows.append(
+                "<tr style='background:#eef2f7'>"
+                f"<td colspan='3' style='padding:7px 10px;font-weight:700;"
+                f"color:{BLUE}'>HS-4 · {hs4}"
+                + (f" — {esc(h4d)}" if h4d else "")
+                + "</td></tr>"
+            )
+            for hs6 in sorted(tree[hs4]):
+                node = tree[hs4][hs6]
+                whole, carve = node["whole"], node["carve"]
+                if whole:
+                    d = whole["desc"] or hs6_desc.get(hs6, "")
+                    flagged, reason = whole["flagged"], whole["reason"]
+                else:
+                    d = hs6_desc.get(hs6, "")
+                    flagged, reason = False, ""
+                note6 = "" if whole else (
+                    " <span style='color:#888;font-style:italic'>· selected "
+                    "detail codes only</span>"
+                )
+                notes6 = (
+                    f"<span style='color:{RED};font-style:italic'>{esc(reason)}</span>"
+                    if flagged and reason else ""
+                )
+                rows.append(
+                    "<tr style='border-bottom:1px solid #eee'>"
+                    f"<td style='padding:5px 10px 5px 24px;font-weight:600;"
+                    f"color:{DARK};white-space:nowrap'>{hs6}</td>"
+                    f"<td style='padding:5px 10px;color:{DARK}'>{esc(d)}{note6}</td>"
+                    f"<td style='padding:5px 10px'>{notes6}</td></tr>"
+                )
+                # Detail level: carve-out rows when pinned, else all HS-10 kids.
+                if carve:
+                    detail = [(r["code"], r["desc"] or "", r) for r in carve]
+                else:
+                    detail = [(c, dd, None) for c, dd in hs6_to_detail.get(hs6, [])]
+                for code, dd, r in detail:
+                    cflag = bool(r and r["flagged"])
+                    cnotes = (
+                        f"<span style='color:{RED};font-style:italic'>"
+                        f"{esc(r['reason'])}</span>"
+                        if cflag and r and r["reason"] else ""
+                    )
+                    rows.append(
+                        "<tr style='border-bottom:1px solid #f4f4f4'>"
+                        f"<td style='padding:4px 10px 4px 48px;color:{MUTED};"
+                        f"white-space:nowrap'>{code}</td>"
+                        f"<td style='padding:4px 10px;color:{MUTED}'>{esc(dd)}</td>"
+                        f"<td style='padding:4px 10px'>{cnotes}</td></tr>"
+                    )
+        st.markdown(
+            "<table style='width:100%;border-collapse:collapse;font-size:13px'>"
+            + "".join(rows) + "</table>",
+            unsafe_allow_html=True,
+        )
+        st.divider()
+
+
+def run():
+    """Multipage entry point: page config + shared CSS, then navigation."""
+    st.set_page_config(
+        page_title="Strengthening Canada's Grid Equipment Supply Chain",
+        layout="wide",
+    )
+    _inject_global_css()
+    nav = st.navigation(
+        [
+            st.Page(page_dashboard, title="Trade Dashboard", icon="📊", default=True),
+            st.Page(
+                page_categorization,
+                title="Equipment Categorization",
+                icon="🗂️",
+            ),
+        ]
+    )
+    nav.run()
+
+
 if __name__ == "__main__":
-    main()
+    run()
