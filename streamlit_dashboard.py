@@ -665,6 +665,11 @@ def main():
     st.markdown(
         "<hr style='margin-top:32px;margin-bottom:6px;border:none;"
         "border-top:1px solid #eee;'>"
+        "<div style='color:#888;font-size:11px;padding-bottom:2px;'>"
+        "Source: <a href='https://www150.statcan.gc.ca/n1/pub/71-607-x/"
+        "71-607-x2021004-eng.htm' target='_blank' style='color:#888;'>"
+        "StatsCanada — Canadian International Merchandise Trade Web Application"
+        "</a></div>"
         "<div style='text-align:right;color:#888;font-size:11px;"
         "padding-bottom:16px;'>"
         "Version 1.0 · Developed by Rami F. · Data extracted 5 May 2026"

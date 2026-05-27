@@ -27,7 +27,7 @@ HS 850433 ; Transformers electric, power handling capacity > 16 kVA but <= 500 k
 HS 850434 ; Transformers electric, having a power handling capacity exceeding 500 kVA, nes
 HS 850440 ; Static converters, nes
 HS 850450 ; Inductors, electric
-HS 850490 ; Parts of electrical transformers, static converters and inductors
+HS 850490 ; Parts,of electrical transformers,static converters (ex rectifiers) and inductors
 HS 853210 ; Fixed capacitors dsnd for use in 50/60 Hz circuits & reactive power>=0.5 kvar
 HS 853229 ; Electrical capacitors, fixed, nes
 HS 853230 ; Electrical capacitors, variable or adjustable (pre-set)
@@ -51,7 +51,7 @@ HS 854411 ; Winding wire, insulated, of copper, electric, including enamelled or
 HS 854419 ; Winding wire, insulated, o/t of copper, electric, including enamelled/anodized
 HS 854420 ; Co-axial cable and other co-axial electric conductors
 HS 854442 ; Electric conductors, insulated, for a voltage <= 1,000 V, fitted with connectors
-HS 854449 ; Electric conductors, for a voltage not exceeding 80 V, nes
+HS 854449 ; Electric conductors, insulated, for a voltage not exceeding 80 V, nes
 HS 854460 ; Electric conductors, insulated, for a voltage exceeding 1,000 V, nes
 HS 854610 ; Insulators, electrical, of glass
 HS 854620 ; Electrical insulators of ceramics
