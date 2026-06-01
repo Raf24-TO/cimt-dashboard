@@ -527,22 +527,74 @@ def page_dashboard():
         else:
             visible_hs6 = [c for c in all_hs6 if c.startswith(sel_hs4)]
 
+        # HS-6 codes that report a quantity for the current flow (any row with
+        # quantity_1 > 0). Codes without quantity are tagged "· no quantity" in
+        # the picker — CIMT publishes value only for them.
+        qty_codes = (
+            set(df.loc[df["quantity_1"].fillna(0) > 0, "hs6"].unique())
+            if "quantity_1" in df.columns else set()
+        )
+
         if "hs6_select" not in st.session_state:
             st.session_state["hs6_select"] = [ALL]
+        st.caption(
+            "Codes tagged <span style='color:#c0392b;font-weight:600'>"
+            "· no quantity</span> report value only — CIMT publishes "
+            "no quantity/unit for them.",
+            unsafe_allow_html=True,
+        )
         sel_hs_raw = st.multiselect(
             "HS-6 code",
             options=[ALL] + visible_hs6,
-            format_func=lambda c: c if c == ALL else f"{c} — {hs6_desc.get(c, '')}",
+            format_func=lambda c: (
+                c if c == ALL
+                else f"{c} — {hs6_desc.get(c, '')}"
+                + ("" if c in qty_codes else "   · no quantity")
+            ),
             key="hs6_select",
             on_change=_make_all_or_specific_callback("hs6_select", "hs6_prev"),
         )
         st.session_state.setdefault("hs6_prev", list(sel_hs_raw))
-        st.caption(
-            "**HS** (Harmonized System) is the 6-digit international product "
-            "code used in customs declarations. It overlaps in scope with "
-            "**NAICS / NAPCS** (the StatCan industry / product classifications) "
-            "but is organized by *product type* rather than *industry*, so "
-            "exact one-to-one mapping isn't possible."
+        # Streamlit's multiselect renders option labels as plain text — there's
+        # no per-option color hook. This tiny script (mounted via an invisible
+        # component iframe, with access to the parent document) walks the
+        # dropdown options and selected chips and colors the "· no quantity"
+        # suffix red as new ones appear.
+        components.html(
+            """
+            <script>
+            (function(){
+              const RED='#c0392b', MARK='· no quantity';
+              function paint(el){
+                const w=document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                const nodes=[]; let n;
+                while((n=w.nextNode())) nodes.push(n);
+                nodes.forEach(node=>{
+                  const i=node.nodeValue.indexOf(MARK);
+                  if(i<0) return;
+                  if(node.parentElement && node.parentElement.dataset.nq) return;
+                  const span=document.createElement('span');
+                  span.style.color=RED; span.style.fontWeight='600';
+                  span.textContent=MARK; span.dataset.nq='1';
+                  const p=node.parentNode;
+                  p.insertBefore(document.createTextNode(node.nodeValue.slice(0,i)), node);
+                  p.insertBefore(span, node);
+                  p.insertBefore(document.createTextNode(node.nodeValue.slice(i+MARK.length)), node);
+                  p.removeChild(node);
+                });
+              }
+              function scan(){
+                const d=window.parent.document;
+                d.querySelectorAll('[data-baseweb="tag"], [role="option"]').forEach(paint);
+              }
+              scan();
+              new MutationObserver(scan).observe(
+                window.parent.document.body, {childList:true, subtree:true}
+              );
+            })();
+            </script>
+            """,
+            height=0,
         )
         # 'All' (or empty) expands to everything visible.
         if ALL in sel_hs_raw or not sel_hs_raw:
