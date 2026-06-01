@@ -500,32 +500,39 @@ def page_dashboard():
                 del full_restrict[h]
         touched_hs6 = whole_hs6 | set(full_restrict)
 
+        # HS-4 picker — always visible, sitting between Category and HS-6.
+        # When categories are selected, options narrow to the HS-4 headings
+        # those categories touch; otherwise the full HS-4 priority list shows.
         if sel_categories:
-            sel_hs4 = ALL  # individual HS-4 picker is hidden when categories rule
-            hs4_str = ", ".join(f"`{h}`" for h in sorted({c[:4] for c in touched_hs6}))
-            st.markdown(
-                f"<div style='color:#444;font-size:13px;margin:4px 0 8px;'>"
-                f"<b>HS-4:</b> {hs4_str} "
-                f"<span style='color:#888;'>(from {len(sel_categories)} "
-                f"categor{'ies' if len(sel_categories) != 1 else 'y'})</span>"
-                f"</div>",
-                unsafe_allow_html=True,
+            hs4_in_scope = sorted({c[:4] for c in touched_hs6})
+            hs4_picker_options = (
+                [c for c in hs4_codes if c in hs4_in_scope] or hs4_in_scope
+            )
+            hs4_help = (
+                f"Limited to the {len(hs4_in_scope)} HS-4 heading"
+                f"{'s' if len(hs4_in_scope) != 1 else ''} touched by the "
+                "selected categor"
+                + ("ies" if len(sel_categories) != 1 else "y")
+                + "."
             )
         else:
-            sel_hs4 = st.selectbox(
-                "HS-4 (heading)",
-                options=[ALL] + hs4_codes,
-                format_func=lambda c: c if c == ALL else f"{c} — {hs4_desc.get(c, '')}",
-            )
+            hs4_picker_options = hs4_codes
+            hs4_help = "Narrow further to a single HS-4 heading."
+        sel_hs4 = st.selectbox(
+            "HS-4 (heading)",
+            options=[ALL] + hs4_picker_options,
+            format_func=lambda c: c if c == ALL else f"{c} — {hs4_desc.get(c, '')}",
+            help=hs4_help,
+        )
 
-        # HS-6 options scoped by the selected categories, the individual HS-4
-        # picker, or — when neither is narrowed — all codes.
+        # HS-6 options scoped by the selected categories first, then narrowed
+        # further by the HS-4 picker when set.
         if sel_categories:
             visible_hs6 = [c for c in all_hs6 if c in touched_hs6]
-        elif sel_hs4 == ALL:
-            visible_hs6 = all_hs6
         else:
-            visible_hs6 = [c for c in all_hs6 if c.startswith(sel_hs4)]
+            visible_hs6 = all_hs6
+        if sel_hs4 != ALL:
+            visible_hs6 = [c for c in visible_hs6 if c.startswith(sel_hs4)]
 
         # HS-6 codes that report a quantity for the current flow (any row with
         # quantity_1 > 0). Codes without quantity are tagged "· no quantity" in
