@@ -19,6 +19,7 @@ import re
 import folium
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.colors import qualitative as plotly_qual
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -702,8 +703,10 @@ def page_dashboard():
             "Log-scale marker sizes",
             value=False,
             help=(
-                "Off (default): flag area is proportional to import value. "
-                "On: log scaling compresses the range so small origins are still visible."
+                "Off (default): flag area is proportional to the metric "
+                "selected in the Value/Quantity toggle. "
+                "On: log scaling compresses the range so small origins are "
+                "still visible."
             ),
         )
 
@@ -890,9 +893,12 @@ def _render_main_view(
     )
     _excel_download(export_csv, export_name, "Download filtered data (CSV)")
 
+    agg_spec: dict = {"value_cad": ("value_cad", "sum")}
+    if "quantity_1" in view.columns:
+        agg_spec["quantity_1"] = ("quantity_1", "sum")
     agg = (
-        view.groupby(["country", "country_name"], as_index=False, dropna=False)["value_cad"]
-        .sum()
+        view.groupby(["country", "country_name"], as_index=False, dropna=False)
+        .agg(**agg_spec)
         .sort_values("value_cad", ascending=False)
     )
     total = float(agg["value_cad"].sum())
@@ -1022,24 +1028,39 @@ def _render_main_view(
     # Limit to top-N for the map (table below shows everything)
     map_df = plotted.head(top_n).copy()
 
-    # Marker sizes — flag *area* is proportional to import value, so the
-    # diameter scales as sqrt(value). Log scaling is offered as an opt-in
-    # for HS selections that mix tiny and dominant origins.
+    # Marker sizes — flag *area* is proportional to the metric chosen in the
+    # Value/Quantity toggle (driven from session state so the same key the
+    # bar-chart radio writes is read here too). Diameter scales as sqrt(metric);
+    # log scaling is offered as an opt-in for selections that mix tiny and
+    # dominant origins.
+    map_metric = "value_cad"
+    if (
+        show_quantity
+        and "quantity_1" in map_df.columns
+        and st.session_state.get("bar_metric_mode", "Value") == "Quantity"
+    ):
+        map_metric = "quantity_1"
     if not map_df.empty:
-        max_v = float(map_df["value_cad"].max()) or 1.0
+        max_v = float(map_df[map_metric].max()) or 1.0
         min_size, max_size = 14.0, 80.0
         span = max_size - min_size
         if log_size:
             denom = math.log10(max(max_v, 10))
             map_df["marker_size"] = (
-                map_df["value_cad"].clip(lower=1).apply(math.log10) / denom
+                map_df[map_metric].clip(lower=1).apply(math.log10) / denom
             ) * span + min_size
         else:
             map_df["marker_size"] = (
-                (map_df["value_cad"].clip(lower=0) / max_v) ** 0.5 * span + min_size
+                (map_df[map_metric].clip(lower=0) / max_v) ** 0.5 * span + min_size
             )
 
-    folium_map_html = _build_folium_map(map_df, total, canada_role=canada_role)
+    folium_map_html = _build_folium_map(
+        map_df, total,
+        canada_role=canada_role,
+        size_metric=("quantity" if map_metric == "quantity_1" else "value"),
+        unit_display=unit_display,
+        total_qty=total_qty,
+    )
 
     # Treemap data: each origin sized by current-window value, coloured by
     # YoY change (most recent selected year vs the year before).
@@ -1125,6 +1146,16 @@ def _render_main_view(
             )
         else:
             bar_metric_mode = "Value"
+        show_all_legend = st.toggle(
+            f"Show all countries in legend",
+            value=False,
+            key="bar_legend_all",
+            help=(
+                "Off (default): legend shows only the chosen year's top 4 "
+                "destinations + Others. On: show every country in the legend "
+                "(can be long when many partners are represented)."
+            ),
+        )
         bar_fig = _build_yearly_bar_fig(
             bar_view, country_label,
             is_value=(bar_metric_mode == "Value"),
@@ -1132,6 +1163,7 @@ def _render_main_view(
             unit_display=unit_display,
             flow_noun=flow_noun,
             partner_noun=partner_noun,
+            show_all_legend=show_all_legend,
         )
         st.plotly_chart(bar_fig, use_container_width=True)
 
@@ -1372,6 +1404,7 @@ def _build_yearly_bar_fig(
     unit_display: str,
     flow_noun: str = "imports",
     partner_noun: str = "origin",
+    show_all_legend: bool = False,
 ) -> go.Figure:
     """Stacked per-year bar chart by partner country. Same shape for value and
     quantity — the metric column, axis label, and hover format swap between
@@ -1405,11 +1438,42 @@ def _build_yearly_bar_fig(
         .sort_values(ascending=False)
         .index.tolist()
     )
+    # Top 4 of the chosen year (latest year in the selection) — these always
+    # show in the legend; everything else can be expanded in via the toggle.
+    chosen_year = (
+        int(yearly_country["year"].dropna().max())
+        if not yearly_country["year"].dropna().empty else None
+    )
+    if chosen_year is None:
+        top4_chosen: set = set()
+    else:
+        top4_chosen = set(
+            yearly_country[yearly_country["year"] == chosen_year]
+            .sort_values(metric_col, ascending=False)
+            .head(4)["country"]
+            .tolist()
+        )
 
-    palette_extended = [
-        "#F53C23", "#A59669", "#8282EB", "#0AB96E", "#FFB300", "#1A98AF",
-        "#B22A18", "#6F6346", "#4F4FCC", "#066E42", "#C28A00", "#107488",
-    ]
+    # Large combined palette so every distinct country gets a distinct colour.
+    # Top-1 stays the brand red (the dashboard's accent); the rest pulls from
+    # Plotly's Dark24 + Light24 + Alphabet qualitative palettes (~70 unique
+    # after dedup) — well above the ~50 partners that can show up across
+    # 10 years × top-5 + Others.
+    base = (
+        ["#F53C23"]
+        + ["#A59669", "#8282EB", "#0AB96E", "#FFB300", "#1A98AF",
+           "#B22A18", "#6F6346", "#4F4FCC", "#066E42", "#C28A00", "#107488"]
+        + list(plotly_qual.Dark24)
+        + list(plotly_qual.Light24)
+        + list(plotly_qual.Alphabet)
+    )
+    seen: set[str] = set()
+    palette_extended: list[str] = []
+    for c in base:
+        u = c.upper()
+        if u not in seen:
+            seen.add(u)
+            palette_extended.append(c)
     country_colors = {
         c: palette_extended[i % len(palette_extended)]
         for i, c in enumerate(top5_union)
@@ -1447,6 +1511,7 @@ def _build_yearly_bar_fig(
                 y=sub[metric_col],
                 customdata=sub["pct"],
                 marker_color=country_colors[country],
+                showlegend=show_all_legend or country in top4_chosen,
                 hovertemplate=(
                     f"<b>{name}</b><br>{hover_y}<br>"
                     "%{customdata:.1f}% of year<extra></extra>"
@@ -1482,8 +1547,10 @@ def _build_yearly_bar_fig(
             )
         )
 
-    n_traces = len(bar_fig.data)
-    legend_rows = max(1, math.ceil(n_traces / 3))
+    # Legend sizing reflects only the traces actually shown in the legend,
+    # otherwise hiding non-top-4 countries leaves big empty space below.
+    n_legend = sum(1 for t in bar_fig.data if getattr(t, "showlegend", True))
+    legend_rows = max(1, math.ceil(n_legend / 3))
     legend_px = 30 + legend_rows * 22
     plot_px = 380
     fig_height = plot_px + legend_px
@@ -1590,11 +1657,17 @@ def _flag_marker_html(iso2: str, size: int, *, ring_color: str = "white", ring_w
 
 
 def _build_folium_map(
-    map_df: pd.DataFrame, total: float, *, canada_role: str = "destination",
+    map_df: pd.DataFrame,
+    total: float,
+    *,
+    canada_role: str = "destination",
+    size_metric: str = "value",
+    unit_display: str = "",
+    total_qty: float = 0.0,
 ) -> str:
     """Return a self-contained HTML string with a Folium map: Canada shaded
     as the destination (imports) or origin (exports), plus per-partner
-    circular flag markers sized by value."""
+    circular flag markers sized by the chosen metric (value or quantity)."""
     m = folium.Map(
         location=[20, -30],
         zoom_start=2,
@@ -1606,9 +1679,14 @@ def _build_folium_map(
 
     canada_geo = load_canada_geojson()
     if canada_geo is not None:
+        canada_total_line = (
+            f"Total: {_fmt_qty(total_qty, unit_display)}"
+            if size_metric == "quantity" and unit_display and total_qty
+            else f"Total: {fmt_cad(total)}"
+        )
         canada_tooltip = folium.Tooltip(
             f"<div style='font-family:system-ui,sans-serif;font-size:13px;'>"
-            f"<b>Canada ({canada_role})</b><br>Total: {fmt_cad(total)}</div>",
+            f"<b>Canada ({canada_role})</b><br>{canada_total_line}</div>",
             sticky=False,
         )
         folium.GeoJson(
@@ -1629,13 +1707,26 @@ def _build_folium_map(
         size = max(12, min(size, 90))
         iso = str(row["country"])
         name = row["country_name"] if pd.notna(row.get("country_name")) else iso
-        share = (row["value_cad"] / total * 100.0) if total > 0 else 0.0
-        tooltip = (
-            f"<div style='font-family:system-ui,sans-serif;font-size:13px;'>"
-            f"<b>{name}</b> ({iso})<br>"
-            f"{fmt_cad(float(row['value_cad']))}<br>"
-            f"{share:.1f}% of total</div>"
-        )
+        if size_metric == "quantity" and unit_display and "quantity_1" in row.index:
+            qty = float(row.get("quantity_1") or 0.0)
+            share = (qty / total_qty * 100.0) if total_qty > 0 else 0.0
+            primary = _fmt_qty(qty, unit_display)
+            secondary = fmt_cad(float(row["value_cad"]))
+            tooltip = (
+                f"<div style='font-family:system-ui,sans-serif;font-size:13px;'>"
+                f"<b>{name}</b> ({iso})<br>"
+                f"{primary}<br>"
+                f"<span style='color:#666'>{secondary}</span><br>"
+                f"{share:.1f}% of total</div>"
+            )
+        else:
+            share = (row["value_cad"] / total * 100.0) if total > 0 else 0.0
+            tooltip = (
+                f"<div style='font-family:system-ui,sans-serif;font-size:13px;'>"
+                f"<b>{name}</b> ({iso})<br>"
+                f"{fmt_cad(float(row['value_cad']))}<br>"
+                f"{share:.1f}% of total</div>"
+            )
         folium.Marker(
             location=[float(row["lat"]), float(row["lon"])],
             icon=folium.DivIcon(
