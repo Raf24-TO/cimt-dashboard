@@ -21,8 +21,6 @@ HS 761490 ; Stranded wire, cables, plaited bands & the like or alum, not elect i
 HS 850421 ; Liquid dielectric transformers, having a power handling capacity <=650 kVA
 HS 850422 ; Liq dielectric transf, having a power handling cap >650 kVA but <= 10,000 kVA
 HS 850423 ; Liq dielectric transf, having a power handling capacity exceeding 10,000 kVA
-HS 850431 ; Transformers electric, power handling capacity not exceeding 1 kVA, nes
-HS 850432 ; Transformers electric, power handling capacity > 1 kVA but <= 16 kVA, nes
 HS 850433 ; Transformers electric, power handling capacity > 16 kVA but <= 500 kVA, nes
 HS 850434 ; Transformers electric, having a power handling capacity exceeding 500 kVA, nes
 HS 850440 ; Static converters, nes

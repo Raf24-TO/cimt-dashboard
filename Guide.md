@@ -43,8 +43,10 @@ CIMT zip download pattern used by the extractor:
 - **Years:** 2016 – 2025 (10 years).
 - **Trade flows:** `imports` and `domestic_exports` (Canadian-origin exports;
   re-exports excluded). The pipeline can also handle `total_exports`.
-- **Products:** **67 focus HS-6 codes** (grid equipment + upstream materials),
-  expanding to **302 HS-10 (imports) / HS-8 (domestic exports)** detail codes.
+- **Products:** **65 focus HS-6 codes** (grid equipment + upstream materials),
+  expanding to ~300 HS-10 (imports) / HS-8 (domestic exports) detail codes.
+  *(Note: `850431` ≤1 kVA and `850432` >1–16 kVA transformers are
+  intentionally excluded — sub-grid-scale electronic/control transformers.)*
 - **Partners:** 223 countries in the trade data; 71 origin countries + ~9,556
   importing companies in the importer registry (2023).
 - **Currency:** values in CAD, available **nominal** or **constant 2025 CAD**
@@ -71,7 +73,7 @@ code is broad or partly non-grid — see the reasoning in `equipment_categories.
 | Category | HS-6 codes |
 |----------|------------|
 | **Large Power Transformer (≥100 MVA)** | `850423` → HS-10 `8504230030` only (imports, 2019+) |
-| **Medium / Substation Transformer** | `850421`, `850422`, `850433`, `850434`, `850431`⚠, `850432`⚠; plus `850423`'s lower bands (`8504230010/20/00`, export `85042300`) |
+| **Medium / Substation Transformer** | `850421`, `850422`, `850433`, `850434`; plus `850423`'s lower bands (`8504230010/20/00`, export `85042300`) |
 | **High-Voltage Switchgear** | `853510`, `853529`, `853590`, `853540`⚠ |
 | **Medium-Voltage Switchgear** | `853521`⚠, `853610`⚠, `853620`⚠, `853630`⚠, `853650`⚠, `853690`⚠ (8536 = ≤1 kV, technically LV, folded in) |
 | **Underground / Submarine Cable** | `854460`; `854420`⚠ (coax), `854442`⚠, `854449`⚠ (LV) |

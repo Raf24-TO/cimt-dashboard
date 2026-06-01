@@ -50,8 +50,6 @@ The remainder of 850423 (everything except the >100 MVA HS-10) lands here.
 | 8504230020 | HS-10 | Liquid dielectric transformers, >59,000 ≤100,000 kVA (59–100 MVA) | Below the LPT threshold; substation power transformer. |
 | 8504230000 | HS-10 | Liquid dielectric transformers, >10,000 kVA (imports 2016–2018, no band detail) | Pre-2019 aggregate of the >10 MVA band; no >100 MVA breakout available. |
 | 85042300 | HS-8 | Liquid dielectric transformers, >10,000 kVA (domestic exports) | Exports have no band split; the whole >10 MVA bucket sits here. |
-| 850431 | HS-6 | Transformers, ≤1 kVA, nes | ⚠ FLAG — Sub-grid-scale (control/electronic transformer); forced to nearest transformer bucket. |
-| 850432 | HS-6 | Transformers, >1 ≤16 kVA, nes | ⚠ FLAG — Sub-grid-scale; forced to nearest transformer bucket. |
 
 ## 3. High-Voltage Switchgear
 
@@ -189,8 +187,6 @@ These are assigned but worth a second look — move any you disagree with.
 
 | HS-6 | Assigned to | Why flagged |
 |------|-------------|-------------|
-| 850431 | Medium / Substation Transformer | ≤1 kVA — control/electronic, not grid-scale. |
-| 850432 | Medium / Substation Transformer | >1 ≤16 kVA — not grid-scale. |
 | 853540 | High-Voltage Switchgear | Surge arresters; no dedicated bucket. |
 | 853521 | Medium-Voltage Switchgear | <72.5 kV — MV/HV boundary fuzzy. |
 | 853610 | Medium-Voltage Switchgear | ≤1 kV (LV) folded into MV. |

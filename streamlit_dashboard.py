@@ -31,6 +31,12 @@ HS6_PRIORITY_FILE = ROOT / "hs_priority_6.md"
 CATEGORIZATION_FILE = ROOT / "categorization.md"
 EQUIPMENT_CATEGORIES_FILE = ROOT / "equipment_categories.md"
 MAJOR_IMPORTERS_PARQUET = ROOT / "cimt_output" / "major_importers.parquet"
+
+# HS-6 codes intentionally excluded from the dashboard. 850431 (≤1 kVA) and
+# 850432 (>1 ≤16 kVA) are sub-grid-scale — electronic / equipment-internal /
+# small dry-type & control transformers — not grid hardware. Filtered out at
+# data-load so the existing parquets don't have to be regenerated.
+EXCLUDED_HS6: set[str] = {"850431", "850432"}
 LOGO_PATH = ROOT / "assets" / "transition_accelerator.png"
 CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 
@@ -130,6 +136,8 @@ def load_data(signature: tuple[str, float, int] | None = None) -> pd.DataFrame:
         df["quantity_1"] = pd.to_numeric(df["quantity_1"], errors="coerce").fillna(0)
     if "unit_1" not in df.columns:
         df["unit_1"] = pd.NA
+    if "hs6" in df.columns:
+        df = df[~df["hs6"].isin(EXCLUDED_HS6)].copy()
     return df
 
 
@@ -1987,7 +1995,8 @@ def load_major_importers() -> pd.DataFrame:
     """Slim importer registry (focus HS-6 codes only) from major_importers.parquet."""
     if not MAJOR_IMPORTERS_PARQUET.exists():
         return pd.DataFrame()
-    return pd.read_parquet(MAJOR_IMPORTERS_PARQUET)
+    df = pd.read_parquet(MAJOR_IMPORTERS_PARQUET)
+    return df[~df["hs6"].isin(EXCLUDED_HS6)].copy()
 
 
 def page_major_importers():
