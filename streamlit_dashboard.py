@@ -35,9 +35,15 @@ MAJOR_IMPORTERS_PARQUET = ROOT / "cimt_output" / "major_importers.parquet"
 
 # HS-6 codes intentionally excluded from the dashboard. 850431 (≤1 kVA) and
 # 850432 (>1 ≤16 kVA) are sub-grid-scale — electronic / equipment-internal /
-# small dry-type & control transformers — not grid hardware. Filtered out at
-# data-load so the existing parquets don't have to be regenerated.
-EXCLUDED_HS6: set[str] = {"850431", "850432"}
+# small dry-type & control transformers — not grid hardware. The 9030xx codes
+# are HS-4 9030 electrical-measuring instruments (multimeters, oscilloscopes,
+# spectrum analyzers, lab/test gear) — predominantly non-grid and indistinguishable
+# from grid metering in the HS, so dropped entirely. Filtered out at data-load so
+# the existing parquets don't have to be regenerated.
+EXCLUDED_HS6: set[str] = {
+    "850431", "850432",
+    "903031", "903032", "903033", "903039", "903084", "903089",
+}
 LOGO_PATH = ROOT / "assets" / "transition_accelerator.png"
 CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 

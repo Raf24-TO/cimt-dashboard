@@ -43,10 +43,13 @@ CIMT zip download pattern used by the extractor:
 - **Years:** 2016 – 2025 (10 years).
 - **Trade flows:** `imports` and `domestic_exports` (Canadian-origin exports;
   re-exports excluded). The pipeline can also handle `total_exports`.
-- **Products:** **65 focus HS-6 codes** (grid equipment + upstream materials),
+- **Products:** **59 focus HS-6 codes** (grid equipment + upstream materials),
   expanding to ~300 HS-10 (imports) / HS-8 (domestic exports) detail codes.
   *(Note: `850431` ≤1 kVA and `850432` >1–16 kVA transformers are
-  intentionally excluded — sub-grid-scale electronic/control transformers.)*
+  intentionally excluded — sub-grid-scale electronic/control transformers. The
+  HS-4 9030 measuring instruments `903031/032/033/039/084/089` — multimeters,
+  oscilloscopes, spectrum analyzers, electrical-quantity meters — are also
+  excluded as predominantly lab/test, non-grid gear.)*
 - **Partners:** 223 countries in the trade data; 71 origin countries + ~9,556
   importing companies in the importer registry (2023).
 - **Currency:** values in CAD, available **nominal** or **constant 2025 CAD**
@@ -63,7 +66,7 @@ HS (Harmonized System) codes classify goods by *product type*. Granularity:
 
 ---
 
-## 4. The 67 focus HS-6 codes, by equipment category
+## 4. The 59 focus HS-6 codes, by equipment category
 
 Codes are assigned to grid-equipment categories (defined in
 `equipment_categories.md`). Most map at HS-6; two categories are pinned to
@@ -80,7 +83,7 @@ code is broad or partly non-grid — see the reasoning in `equipment_categories.
 | **HVDC Converter Station** | `850440` → HS-10 high-power subset (see §5) |
 | **Overhead Conductor** | `741300` (bare Cu), `761410` (ACSR), `761490` (Al), `730820`⚠ (towers) |
 | **Substation reactive-power equipment** (shunt reactors, capacitor banks, SVC/STATCOM) | `853210`; `850450`⚠ (inductors), `853229`⚠, `853230`⚠, `853290`⚠ (capacitors) |
-| **Protection & Control panels** | `853710`, `853720`, `853649`; `853641`⚠ (relays), `903031/032/033/039/084/089`⚠ (measuring instruments) |
+| **Protection & Control panels** | `853710`, `853720`, `853649`; `853641`⚠ (relays). *(HS-4 9030 measuring instruments excluded — non-grid lab/test gear.)* |
 | **Disconnect Switches (HV/MV)** | `853530` |
 | **Raw Materials** (upstream feedstock & components) | Electrical steel `722511/519/611/619`; copper `740710/811/819/821/829`; aluminium `760410/421/429/511/519/521/529`; winding wire `854411/419`; insulators `854610/620/690`; insulating fittings `854710/720/790`; transformer/converter parts `850490`⚠ |
 
@@ -175,7 +178,7 @@ StatCan Canadian Importers Database, 2023, filtered to the focus HS-6 codes.
 - `cimt_trade_summary_by_hs6.csv` — totals per HS-6.
 
 ### Source / config files (repo root)
-- `hs_priority_6.md` — the 67 focus HS-6 codes + curated descriptions.
+- `hs_priority_6.md` — the 59 focus HS-6 codes + curated descriptions.
 - `equipment_categories.md` — category → code mapping, reasoning, flags, carve-outs.
 - `categorization.md` — older HS-4 tier grouping (superseded by the above).
 - `country_coords.csv` — lat/long for the map.
@@ -229,8 +232,9 @@ Company-level importer registry (CID, 2023) filtered to the focus codes.
 - **HS ≠ end-use.** HS codes describe product type, not application. Several
   focus codes are broad or partly non-grid; these are flagged `⚠` in
   `equipment_categories.md` with reasoning (e.g. `850440` static converters
-  includes consumer power supplies; `730820` includes bridges/building steel;
-  `9030xx` measuring instruments include lab/test gear).
+  includes consumer power supplies; `730820` includes bridges/building steel).
+  The `9030xx` measuring instruments were so dominated by lab/test gear that they
+  are **excluded entirely** (see §3 and the Protection & Control note).
 - **HS-10 detail is imports-only.** Domestic exports stop at HS-8, so the
   >100 MVA transformer and high-power-converter carve-outs have no export series.
 - **Large Power Transformer series starts 2019** (pre-2019 imports only report

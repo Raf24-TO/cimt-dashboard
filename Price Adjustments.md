@@ -73,8 +73,8 @@ view = view.assign(value_cad=view["value_cad"] * factor)
 ### 2. Which IPPI series to use
 
 The P73 group is a strong fit for **Tier 1** equipment (8504, 8535, 8536, 8537,
-8544 — all electrical/electronic) and **Tier 2** (8532, 9030 — capacitors and
-electrical instruments). It is a worse fit for **Critical Inputs**:
+8544 — all electrical/electronic) and **Tier 2** (8532 — capacitors). It is a
+worse fit for **Critical Inputs**:
 
 | HS code | What it covers      | Better-fitting IPPI         |
 |---------|---------------------|-----------------------------|

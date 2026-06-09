@@ -57,9 +57,3 @@ HS 854690 ; Electrical insulators, nes
 HS 854710 ; Insulating fittings of ceramics for elec machines, appliances or equipment
 HS 854720 ; Insulating fittings of plastics for elec machines, appliances or equipment
 HS 854790 ; Insulating fittings for electrical mach appliances or equipment, nes
-HS 903031 ; Multimeters,w/o recording device,meas/chk vltge/curr/etc,o/t semicon wafers/dev
-HS 903032 ; Multimeters,with recording device,meas/chk vltge/curr/etc,o/t semicon wafers/dev
-HS 903033 ; Inst & app,f meas/checking voltage,curr, resis or power,w/o recording dev,nes
-HS 903039 ; Inst & app, for measuring or checking voltage, current, etc, w/o a record dev
-HS 903084 ; Inst & app,for measuring or checking elec quantities,with recording device,nes
-HS 903089 ; Instruments and apparatus for measuring or checking electrical quantities, nes

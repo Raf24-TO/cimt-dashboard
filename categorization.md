@@ -23,7 +23,6 @@ Supporting equipment that helps the grid run efficiently and reliably.
 | HS Code | What It Covers |
 |---------|----------------|
 | 8532 | Electrical capacitors (reactive power, power factor correction) |
-| 9030 | Instruments for measuring electrical quantities |
 
 ## Critical Inputs: Upstream Materials and Components
 
@@ -45,4 +44,4 @@ The raw materials and parts that feed into the manufacturing of Tier 1 equipment
 
 **7308 (iron/steel structures)** also covers non-grid items like bridges and building frames. Trade numbers cannot be cleanly isolated to transmission towers and substation structures.
 
-**9030 (electrical measurement instruments)** is a broad category that includes lab and electronics test equipment. Most volume is not grid-specific. Smart grid communications hardware typically falls under different codes (8517, 8471).
+**9030 (electrical measurement instruments) — excluded.** This is a broad category dominated by lab and electronics test equipment; most volume is not grid-specific and grid metering is indistinguishable from test gear in the HS, so it has been dropped from the dataset and dashboard. Smart grid communications hardware typically falls under different codes (8517, 8471).

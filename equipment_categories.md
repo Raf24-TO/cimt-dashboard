@@ -1,8 +1,10 @@
 # Grid-Equipment Categorization
 
-Maps every HS-6 code in `hs_priority_6.md` (67 codes) to one of the equipment
+Maps every HS-6 code in `hs_priority_6.md` (59 codes) to one of the equipment
 categories you specified, plus a **Raw Materials** bucket (the former
-"Critical Inputs", renamed). All 67 codes are assigned.
+"Critical Inputs", renamed). All 59 codes are assigned. (Sub-grid transformers
+`850431`/`850432` and HS-4 9030 measuring instruments `903031/032/033/039/084/089`
+were excluded as non-grid — see the note under Protection & Control panels.)
 
 **Method caveat.** HS codes classify goods by *what they are* (product type,
 voltage band, power rating, material), not by *where they're used*. Your
@@ -133,12 +135,12 @@ controllers ($1.7B) — all non-grid.
 | 853720 | Boards/panels/consoles, >1,000 V | HV switchboards / control panels. |
 | 853649 | Electrical relays, >60 V ≤1,000 V | Protective relays. |
 | 853641 | Electrical relays, ≤60 V | ⚠ FLAG — LV control relays; some non-grid (auto/electronics). |
-| 903033 | Instruments measuring voltage/current/power, w/o recording, nes | ⚠ FLAG — Grid metering vs lab/test indistinguishable in HS. |
-| 903084 | Instruments measuring electrical quantities, with recording, nes | ⚠ FLAG — Could be PMU/recording metering, but mostly test instruments. |
-| 903031 | Multimeters, w/o recording | ⚠ FLAG — Predominantly lab/test, not grid. |
-| 903032 | Multimeters, with recording | ⚠ FLAG — Predominantly lab/test, not grid. |
-| 903039 | Instruments measuring voltage/current, w/o recording dev | ⚠ FLAG — Broad lab/test category. |
-| 903089 | Instruments measuring electrical quantities, nes | ⚠ FLAG — Broad lab/test category. |
+
+> **Excluded:** HS-4 **9030** electrical-measuring instruments
+> (`903031/032/033/039/084/089` — multimeters, oscilloscopes, spectrum analyzers
+> and other voltage/current/power meters) were dropped from this category and the
+> dashboard. They are predominantly lab/test equipment and indistinguishable from
+> grid metering in the HS, so they overstated the category with non-grid trade.
 
 ## 10. Disconnect Switches (HV/MV)
 
@@ -205,10 +207,4 @@ These are assigned but worth a second look — move any you disagree with.
 | 853230 | Substation reactive-power equipment | Variable capacitors — electronics. |
 | 853290 | Substation reactive-power equipment | Parts of capacitors. |
 | 853641 | Protection & Control panels | ≤60 V control relays; some non-grid. |
-| 903031 | Protection & Control panels | Multimeters — lab/test. |
-| 903032 | Protection & Control panels | Multimeters — lab/test. |
-| 903033 | Protection & Control panels | Metering vs lab/test indistinguishable. |
-| 903039 | Protection & Control panels | Broad lab/test. |
-| 903084 | Protection & Control panels | Recording metering vs test. |
-| 903089 | Protection & Control panels | Broad lab/test. |
 | 850490 | Raw Materials | Parts of transformers/converters/inductors; spans categories, grouped as component input. |
