@@ -1416,6 +1416,31 @@ def _fmt_qty(v: float, unit: str) -> str:
     return f"{v:,.0f} {unit}"
 
 
+def _money_tick_text(v: float) -> str:
+    """Adaptive $ axis label: $17.4B / $250M / $50k / $0 — matches the headline's
+    'B' suffix instead of d3's SI 'G', and scales down for small selections."""
+    a = abs(v)
+    if a >= 1e9:
+        return f"${v / 1e9:.1f}".rstrip("0").rstrip(".") + "B"
+    if a >= 1e6:
+        return f"${v / 1e6:.0f}M"
+    if a >= 1e3:
+        return f"${v / 1e3:.0f}k"
+    return f"${v:.0f}"
+
+
+def _nice_ticks(ymax: float, target: int = 6) -> list[float]:
+    """Tick values 0 … ≥ymax at a 'nice' 1/2/2.5/5 × 10^n step, so the top tick
+    always clears the tallest bar (no value floating above the axis)."""
+    if not ymax or ymax <= 0:
+        return [0.0]
+    raw = ymax / target
+    mag = 10 ** math.floor(math.log10(raw))
+    step = next((mag * m for m in (1, 2, 2.5, 5, 10) if mag * m >= raw), mag * 10)
+    n = int(math.ceil(ymax / step))
+    return [step * i for i in range(n + 1)]
+
+
 
 
 
@@ -1523,7 +1548,13 @@ def _build_yearly_bar_fig(
             f"({basis_label})"
         )
         yaxis_title = f"Value ({basis_label})"
-        yaxis_fmt = "$,.0s"
+        # Explicit "nice" ticks with a $-and-B label (e.g. $5B, $10B, $15B) so
+        # the axis matches the headline and never mislabels a gridline the way
+        # d3's 1-sig-fig ".0s" did (16B/18B/20B all printed "$20G").
+        _ymax = max(year_totals.values()) if year_totals else 0.0
+        _tickvals = _nice_ticks(_ymax)
+        _ticktext = [_money_tick_text(v) for v in _tickvals]
+        yaxis_fmt = None
         hover_y = "$%{y:,.0f}"
     else:
         title_text = (
@@ -1531,7 +1562,9 @@ def _build_yearly_bar_fig(
             f"({unit_display})"
         )
         yaxis_title = f"Quantity ({unit_display})"
-        yaxis_fmt = ",.0s"
+        yaxis_fmt = ",.2s"
+        _tickvals = None
+        _ticktext = None
         hover_y = "%{y:,.0f} " + unit_display
 
     bar_fig = go.Figure()
@@ -1591,17 +1624,31 @@ def _build_yearly_bar_fig(
     plot_px = 380
     fig_height = plot_px + legend_px
 
+    # Value charts use explicit nice ticks ($5B, $10B…) with a forced range so
+    # the top tick clears the tallest bar; quantity charts keep SI tick labels.
+    if _tickvals and _tickvals[-1] > 0:
+        yaxis_opts = dict(
+            title=yaxis_title,
+            tickmode="array",
+            tickvals=_tickvals,
+            ticktext=_ticktext,
+            range=[0, _tickvals[-1]],
+            automargin=True,
+        )
+    else:
+        yaxis_opts = dict(
+            title=yaxis_title,
+            tickformat=yaxis_fmt,
+            automargin=True,
+        )
+
     bar_fig.update_layout(
         barmode="stack",
         height=fig_height,
         margin=dict(l=10, r=10, t=30, b=legend_px),
         title=dict(text=title_text, x=0, font=dict(size=14)),
         xaxis=dict(title=None, dtick=1, automargin=True),
-        yaxis=dict(
-            title=yaxis_title,
-            tickformat=yaxis_fmt,
-            automargin=True,
-        ),
+        yaxis=yaxis_opts,
         legend=dict(
             orientation="h",
             yref="container",
