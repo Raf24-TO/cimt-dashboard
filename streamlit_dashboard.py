@@ -121,6 +121,17 @@ def _data_file_signature() -> tuple[str, float, int]:
     return ("", 0.0, 0)
 
 
+def _path_signature(path: Path) -> tuple[str, float, int]:
+    """Cache-buster for file-backed parsers: when the file changes on disk its
+    mtime/size shift, so st.cache_data treats it as a new input and reparses.
+    Without this, parsers keyed only on the path serve a stale parse until the
+    app process restarts (e.g. edits to equipment_categories.md not showing)."""
+    if path.exists():
+        stat = path.stat()
+        return (str(path), stat.st_mtime, stat.st_size)
+    return (str(path), 0.0, 0)
+
+
 @st.cache_data(show_spinner="Loading trade data…")
 def load_data(signature: tuple[str, float, int] | None = None) -> pd.DataFrame:
     """Prefer the slim Parquet (committed to git for cloud deploy); fall back to
@@ -189,8 +200,13 @@ def load_hs_priority(path: Path) -> tuple[list[str], dict[str, str]]:
 
 
 @st.cache_data
-def load_equipment_categories(path: Path) -> list[dict]:
+def load_equipment_categories(
+    path: Path, sig: tuple[str, float, int] | None = None
+) -> list[dict]:
     """Parse equipment_categories.md into grid-equipment categories.
+
+    ``sig`` is unused in the body; it only lets st.cache_data reparse when the
+    file changes (pass ``_path_signature(path)``).
 
     Each ``## N. <Category Name>`` heading starts a category; the first column
     of every markdown table row beneath it holds an HS code. Codes are
@@ -438,7 +454,9 @@ def page_dashboard():
     # in the current flow's data.
     hs6_in_data = set(all_hs6)
     categories = [
-        c for c in load_equipment_categories(EQUIPMENT_CATEGORIES_FILE)
+        c for c in load_equipment_categories(
+            EQUIPMENT_CATEGORIES_FILE, _path_signature(EQUIPMENT_CATEGORIES_FILE)
+        )
         if (c["hs6"] & hs6_in_data) or {f[:6] for f in c["full"]} & hs6_in_data
     ]
     cat_by_name = {c["name"]: c for c in categories}
@@ -1948,8 +1966,13 @@ def _render_yoy_table(rows: pd.DataFrame, *, show_transition_header: bool = True
 
 
 @st.cache_data
-def _category_entries(path: Path) -> list[dict]:
+def _category_entries(
+    path: Path, sig: tuple[str, float, int] | None = None
+) -> list[dict]:
     """Parse equipment_categories.md into per-category rows.
+
+    ``sig`` is unused in the body; it only lets st.cache_data reparse when the
+    file changes (pass ``_path_signature(path)``).
 
     Returns ``[{name, intro, rows:[{code, desc, reason, flagged}]}]`` for each
     numbered ``## N. Name`` category. ``flagged`` is true when the reasoning
@@ -2014,8 +2037,9 @@ def page_categorization():
         unsafe_allow_html=True,
     )
 
-    cats = load_equipment_categories(EQUIPMENT_CATEGORIES_FILE)
-    entries = _category_entries(EQUIPMENT_CATEGORIES_FILE)
+    _cat_sig = _path_signature(EQUIPMENT_CATEGORIES_FILE)
+    cats = load_equipment_categories(EQUIPMENT_CATEGORIES_FILE, _cat_sig)
+    entries = _category_entries(EQUIPMENT_CATEGORIES_FILE, _cat_sig)
     if not cats or not entries:
         st.error(
             f"Categorization file not found or empty: {EQUIPMENT_CATEGORIES_FILE.name}"
@@ -2180,7 +2204,9 @@ def page_major_importers():
     hs6_desc = dict(zip(hd["hs6"], hd["hs_description"].fillna("")))
 
     # Category type → the HS-6 codes it covers that exist in the importer data.
-    cats = load_equipment_categories(EQUIPMENT_CATEGORIES_FILE)
+    cats = load_equipment_categories(
+        EQUIPMENT_CATEGORIES_FILE, _path_signature(EQUIPMENT_CATEGORIES_FILE)
+    )
     present = set(imp["hs6"].unique())
     cat_hs6 = {
         c["name"]: (c["hs6"] | {f[:6] for f in c["full"]}) & present for c in cats
