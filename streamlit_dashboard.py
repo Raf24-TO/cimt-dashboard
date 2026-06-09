@@ -1440,11 +1440,14 @@ def _build_yearly_bar_fig(
         .groupby(["year", "country"], as_index=False, dropna=False)[metric_col]
         .sum()
     )
+    # Each year keeps its top 4 partners by name; everything else folds into
+    # "Others". TOP_N is 4 so the named bands match the legend exactly.
+    TOP_N = 4
     yearly_country["rank"] = yearly_country.groupby("year")[metric_col].rank(
         method="first", ascending=False
     )
     yearly_country["bucket"] = yearly_country["country"].where(
-        yearly_country["rank"] <= 5, "Others"
+        yearly_country["rank"] <= TOP_N, "Others"
     )
     yearly = yearly_country.groupby(
         ["year", "bucket"], as_index=False
@@ -1455,26 +1458,35 @@ def _build_yearly_bar_fig(
         if year_totals.get(r["year"], 0) else 0.0,
         axis=1,
     )
-    top5_union = (
-        yearly_country[yearly_country["rank"] <= 5]
-        .groupby("country")[metric_col]
-        .sum()
-        .sort_values(ascending=False)
-        .index.tolist()
-    )
-    # Top 4 of the chosen year (latest year in the selection) — these always
-    # show in the legend; everything else can be expanded in via the toggle.
+    # Chosen year = latest year in the selection; its top 4 always show in the
+    # legend and set the stack order.
     chosen_year = (
         int(yearly_country["year"].dropna().max())
         if not yearly_country["year"].dropna().empty else None
+    )
+    named = yearly_country[yearly_country["rank"] <= TOP_N]
+    total_val = named.groupby("country")[metric_col].sum().to_dict()
+    chosen_val = (
+        named[named["year"] == chosen_year]
+        .set_index("country")[metric_col]
+        .to_dict()
+        if chosen_year is not None else {}
+    )
+    # Stack order: largest in the chosen year first → rendered at the BOTTOM of
+    # the stack, descending upward. Countries absent that year fall back to
+    # their cross-year total. "Others" is added last so it always sits on top.
+    top_union = sorted(
+        total_val,
+        key=lambda c: (chosen_val.get(c, float("-inf")), total_val.get(c, 0.0)),
+        reverse=True,
     )
     if chosen_year is None:
         top4_chosen: set = set()
     else:
         top4_chosen = set(
-            yearly_country[yearly_country["year"] == chosen_year]
+            named[named["year"] == chosen_year]
             .sort_values(metric_col, ascending=False)
-            .head(4)["country"]
+            .head(TOP_N)["country"]
             .tolist()
         )
 
@@ -1500,14 +1512,14 @@ def _build_yearly_bar_fig(
             palette_extended.append(c)
     country_colors = {
         c: palette_extended[i % len(palette_extended)]
-        for i, c in enumerate(top5_union)
+        for i, c in enumerate(top_union)
     }
     others_color = "#9AA0A6"
 
     # Mode-specific labels/formats.
     if is_value:
         title_text = (
-            f"Annual {flow_noun} — each year's top 5 {partner_noun}s + Others "
+            f"Annual {flow_noun} — each year's top 4 {partner_noun}s + Others "
             f"({basis_label})"
         )
         yaxis_title = f"Value ({basis_label})"
@@ -1515,7 +1527,7 @@ def _build_yearly_bar_fig(
         hover_y = "$%{y:,.0f}"
     else:
         title_text = (
-            f"Annual quantity — each year's top 5 {partner_noun}s + Others "
+            f"Annual quantity — each year's top 4 {partner_noun}s + Others "
             f"({unit_display})"
         )
         yaxis_title = f"Quantity ({unit_display})"
@@ -1523,7 +1535,7 @@ def _build_yearly_bar_fig(
         hover_y = "%{y:,.0f} " + unit_display
 
     bar_fig = go.Figure()
-    for country in top5_union:
+    for country in top_union:
         sub = yearly[yearly["bucket"] == country].sort_values("year")
         if sub.empty or sub[metric_col].sum() == 0:
             continue
@@ -1547,7 +1559,7 @@ def _build_yearly_bar_fig(
     if not others_sub.empty:
         others_per_year = (
             yearly_country.loc[
-                (yearly_country["rank"] > 5)
+                (yearly_country["rank"] > TOP_N)
                 & (yearly_country[metric_col] > 0)
             ]
             .groupby("year")["country"]
