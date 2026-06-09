@@ -65,16 +65,41 @@ longest-lead, hardest-to-replace item — **large power transformers (>100 MVA)*
 is the *most diversified* slice we track: $204M in 2025 across 10 countries with
 **no U.S. supplier in the top four** (South Korea 21%, Poland 16%, Austria 15%,
 China 12%; HHI 0.14). The *commodity backbone* items — the ones every line build
-consumes — are the concentrated ones:
+consumes — are the concentrated ones. The tables below rank the tracked
+components by supplier concentration (HHI), separating installed equipment from
+the upstream materials that feed it.
 
-| Slice (2025 imports) | Value | Top supplier(s) | Top-3 | HHI |
+**Table 1. Supplier concentration of installed grid equipment, Canadian imports 2025**
+
+| Component | Value | Top supplier(s) | Top-3 | HHI |
 |---|---|---|---|---|
-| Overhead conductor | $0.34B | **U.S. 59%** | 84% | 0.39 |
-| HV switchgear | $0.52B | **U.S. 53%** | 77% | 0.32 |
+| Overhead conductor | $0.34B | **U.S. 59%**, Turkey 13% | 84% | 0.39 |
 | Underground/submarine cable | $3.27B | **U.S. 51%**, China 23% | 81% | 0.32 |
-| Electrical steel (raw feedstock) | $0.71B | **Japan 33%, U.S. 32%**, Korea 15% | 79% | 0.24 |
-| MV switchgear | $2.66B | U.S. 37%, Mexico 18%, China 13% | 68% | 0.20 |
-| Large power transformer (>100 MVA) | $0.20B | Korea 21%, Poland 16% | 53% | 0.14 |
+| HV switchgear | $0.52B | **U.S. 53%**, Mexico 15% | 77% | 0.32 |
+| Protection & control panels | $3.82B | **U.S. 50%**, Mexico 16% | 74% | 0.29 |
+| Disconnect switches | $0.19B | U.S. 44%, Italy 21% | 73% | 0.26 |
+| MV switchgear | $2.66B | U.S. 37%, Mexico 18% | 68% | 0.20 |
+| Medium/substation transformer | $0.49B | U.S. 38%, China 15% | 67% | 0.20 |
+| Reactive-power equipment | $0.19B | U.S. 29%, China 23% | 61% | 0.16 |
+| Large power transformer (>100 MVA) *(contrast)* | $0.20B | Korea 21%, Poland 16% | 53% | 0.14 |
+
+*HVDC converters are omitted: the HS-6 `850440` is heavily diluted by consumer
+power supplies and chargers, and a grid-relevant figure requires the high-power
+HS-10 carve-out.*
+
+**Table 2. Supplier concentration of upstream feedstock & materials, Canadian imports 2025**
+
+| Material | Value | Top supplier(s) | Top-3 | HHI |
+|---|---|---|---|---|
+| Copper | $0.52B | **U.S. 72%**, Peru 5% | 82% | 0.53 |
+| Copper winding wire | $0.23B | **U.S. 61%**, China 13% | 85% | 0.41 |
+| Grain-oriented electrical steel | $0.71B | **Japan 33%, U.S. 32%**, Korea 15% | 79% | 0.24 |
+| Insulators | $0.17B | U.S. 36%, Italy 20% | 74% | 0.21 |
+| Aluminium | $0.80B | U.S. 41%, Malaysia 9% | 58% | 0.20 |
+
+The split is itself a finding: the **feedstock layer is even more U.S.-single-
+sourced than the equipment layer** (copper 72%, winding wire 61%), with grain-
+oriented electrical steel the one strategic exception that pivots to Japan/Korea.
 
 **3. The U.S. exposure is concrete, and it sits in the high-volume backbone.**
 Roughly *half* of Canada's switchgear, cable, and conductor imports come from a
