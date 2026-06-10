@@ -2097,21 +2097,28 @@ def _concordance_xlsx(
     """Build the equipment-category concordance workbook.
 
     Sheet 1 (*Concordance*) is the flat mapping table — one row per assigned
-    HS code: whole HS-6 assignments get a single row, HS-10/HS-8 carve-outs
-    one row per pinned detail code. Weak/forced fits carry "Yes" in the
-    Flagged column with the reasoning in Notes (shown in red, like the page).
-    Sheet 2 (*Category notes*) holds each category's caveat paragraph.
-    Returns the .xlsx file bytes."""
+    HS code: whole HS-6 assignments get a single row, HS-10 carve-outs one
+    row per pinned detail code. Each equipment category gets its own row
+    color. The Raw Materials category and HS-8 export codes are excluded —
+    the concordance covers installed equipment on the import side only.
+    Weak/forced fits carry "Yes" in the Flagged column with the reasoning in
+    Notes (shown in red, like the page). Sheet 2 (*Category notes*) holds
+    each category's caveat paragraph. Returns the .xlsx file bytes."""
     headers = [
         "Equipment category", "HS-4", "HS-4 description", "HS-6",
         "HS-6 description", "Detail code", "Detail description",
         "Coverage", "Flagged", "Notes",
     ]
-    rows: list[list[str]] = []
-    for e in entries:
+    equipment = [
+        e for e in entries if e["name"].strip().lower() != "raw materials"
+    ]
+    rows: list[tuple[int, list[str]]] = []  # (category index, row cells)
+    for ci, e in enumerate(equipment):
         # Same HS-4 → HS-6 → {whole, carve-outs} grouping as the page table.
         tree: dict[str, dict[str, dict]] = {}
         for r in e["rows"]:
+            if len(r["code"]) == 8:  # export-side code — imports only
+                continue
             node = tree.setdefault(r["code"][:4], {}).setdefault(
                 r["code"][:6], {"whole": None, "carve": []}
             )
@@ -2129,19 +2136,17 @@ def _concordance_xlsx(
                      else hs6_desc.get(hs6, "")),
                 ]
                 if whole:
-                    rows.append(base + [
+                    rows.append((ci, base + [
                         "", "", "Whole HS-6 — all detail codes",
                         "Yes" if whole["flagged"] else "",
                         _FLAG_PREFIX_RE.sub("", whole["reason"]),
-                    ])
+                    ]))
                 for r in node["carve"]:
-                    rows.append(base + [
-                        r["code"], r["desc"],
-                        ("HS-10 carve-out (imports)" if len(r["code"]) == 10
-                         else "HS-8 (exports)"),
+                    rows.append((ci, base + [
+                        r["code"], r["desc"], "HS-10 carve-out (imports)",
                         "Yes" if r["flagged"] else "",
                         _FLAG_PREFIX_RE.sub("", r["reason"]),
-                    ])
+                    ]))
 
     buf = io.BytesIO()
     wb = xlsxwriter.Workbook(buf, {"in_memory": True})
@@ -2152,18 +2157,33 @@ def _concordance_xlsx(
         "border": 1, "text_wrap": True, "valign": "vcenter",
     })
     f_cell = wb.add_format({"valign": "top", "text_wrap": True})
-    f_code = wb.add_format({"valign": "top"})
-    f_flag = wb.add_format(
-        {"valign": "top", "text_wrap": True, "font_color": "#c0392b"}
-    )
+
+    # One soft fill per equipment category so each block reads as a unit.
+    palette = [
+        "#DCE6F1", "#E2EFDA", "#FFF2CC", "#FCE4D6", "#EAD1DC",
+        "#D9E1F2", "#D6F5E3", "#FDE9D9", "#E4DFEC", "#DAEEF3",
+    ]
+    cat_fmt: dict[int, tuple] = {}
+    for ci in {c for c, _ in rows}:
+        bg = palette[ci % len(palette)]
+        common = {"valign": "top", "bg_color": bg,
+                  "border": 1, "border_color": "#ffffff"}
+        cat_fmt[ci] = (
+            wb.add_format({**common, "text_wrap": True}),
+            wb.add_format(common),
+            wb.add_format(
+                {**common, "text_wrap": True, "font_color": "#c0392b"}
+            ),
+        )
 
     ws = wb.add_worksheet("Concordance")
     ws.write(0, 0, "Grid-equipment HS concordance", f_title)
     ws.write(
         1, 0,
-        f"Maps Canadian trade HS codes to grid-equipment categories. Whole "
+        f"Maps Canadian import HS codes to grid-equipment categories. Whole "
         f"HS-6 rows include every detail code beneath them; carve-out rows "
-        f"pin the category to the listed HS-10/HS-8 codes only. Source: "
+        f"pin the category to the listed HS-10 codes only. Raw materials "
+        f"and export-side codes are excluded. Source: "
         f"{EQUIPMENT_CATEGORIES_FILE.name}, generated "
         f"{datetime.date.today().isoformat()}.",
         f_sub,
@@ -2171,15 +2191,16 @@ def _concordance_xlsx(
     hr = 3
     for c, h in enumerate(headers):
         ws.write(hr, c, h, f_hdr)
-    for i, row in enumerate(rows, start=hr + 1):
+    for i, (ci, row) in enumerate(rows, start=hr + 1):
+        f_wrap, f_plain, f_red = cat_fmt[ci]
         flagged = row[8] == "Yes"
         for c, v in enumerate(row):
             if flagged and c in (8, 9):
-                fmt = f_flag
+                fmt = f_red
             elif c in (1, 3, 5):
-                fmt = f_code
+                fmt = f_plain
             else:
-                fmt = f_cell
+                fmt = f_wrap
             ws.write(i, c, v, fmt)
     for c, w in enumerate([34, 8, 38, 8, 44, 13, 44, 26, 9, 58]):
         ws.set_column(c, c, w)
@@ -2190,7 +2211,7 @@ def _concordance_xlsx(
     ws2.write(0, 0, "Equipment category", f_hdr)
     ws2.write(0, 1, "Notes", f_hdr)
     r = 1
-    for e in entries:
+    for e in equipment:
         intro = " ".join(e["intro"]).strip()
         if intro:
             ws2.write(r, 0, e["name"], f_cell)
