@@ -12,11 +12,14 @@ Run:
 
 from pathlib import Path
 import base64
+import datetime
 import html
+import io
 import math
 import re
 
 import folium
+import xlsxwriter
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.colors import qualitative as plotly_qual
@@ -337,7 +340,9 @@ def _inject_global_css():
     )
 
 
-def _excel_download(data_bytes: bytes, filename: str, label: str):
+def _excel_download(
+    data_bytes: bytes, filename: str, label: str, mime: str = "text/csv"
+):
     """Right-aligned download link styled as a button, with an Excel-style green
     mark (embedded SVG) rather than a generic download glyph."""
     excel_svg = (
@@ -350,7 +355,7 @@ def _excel_download(data_bytes: bytes, filename: str, label: str):
     data_uri = base64.b64encode(data_bytes).decode()
     st.markdown(
         f"<div style='text-align:right;margin:-4px 0 8px;'>"
-        f"<a href='data:text/csv;base64,{data_uri}' download='{filename}' "
+        f"<a href='data:{mime};base64,{data_uri}' download='{filename}' "
         f"style='display:inline-flex;align-items:center;gap:8px;"
         f"text-decoration:none;border:1px solid #d0d4d9;border-radius:8px;"
         f"padding:6px 14px;background:#fff;color:#1f2937;font-size:14px;"
@@ -2083,6 +2088,121 @@ def _category_entries(
     return [c for c in cats if c["rows"]]
 
 
+_FLAG_PREFIX_RE = re.compile(r"^⚠\s*FLAG\s*[—–-]\s*")
+
+
+def _concordance_xlsx(
+    entries: list[dict], hs4_desc: dict[str, str], hs6_desc: dict[str, str]
+) -> bytes:
+    """Build the equipment-category concordance workbook.
+
+    Sheet 1 (*Concordance*) is the flat mapping table — one row per assigned
+    HS code: whole HS-6 assignments get a single row, HS-10/HS-8 carve-outs
+    one row per pinned detail code. Weak/forced fits carry "Yes" in the
+    Flagged column with the reasoning in Notes (shown in red, like the page).
+    Sheet 2 (*Category notes*) holds each category's caveat paragraph.
+    Returns the .xlsx file bytes."""
+    headers = [
+        "Equipment category", "HS-4", "HS-4 description", "HS-6",
+        "HS-6 description", "Detail code", "Detail description",
+        "Coverage", "Flagged", "Notes",
+    ]
+    rows: list[list[str]] = []
+    for e in entries:
+        # Same HS-4 → HS-6 → {whole, carve-outs} grouping as the page table.
+        tree: dict[str, dict[str, dict]] = {}
+        for r in e["rows"]:
+            node = tree.setdefault(r["code"][:4], {}).setdefault(
+                r["code"][:6], {"whole": None, "carve": []}
+            )
+            if len(r["code"]) == 6:
+                node["whole"] = r
+            else:
+                node["carve"].append(r)
+        for hs4 in sorted(tree):
+            for hs6 in sorted(tree[hs4]):
+                node = tree[hs4][hs6]
+                whole = node["whole"]
+                base = [
+                    e["name"], hs4, hs4_desc.get(hs4, ""), hs6,
+                    (whole["desc"] if whole and whole["desc"]
+                     else hs6_desc.get(hs6, "")),
+                ]
+                if whole:
+                    rows.append(base + [
+                        "", "", "Whole HS-6 — all detail codes",
+                        "Yes" if whole["flagged"] else "",
+                        _FLAG_PREFIX_RE.sub("", whole["reason"]),
+                    ])
+                for r in node["carve"]:
+                    rows.append(base + [
+                        r["code"], r["desc"],
+                        ("HS-10 carve-out (imports)" if len(r["code"]) == 10
+                         else "HS-8 (exports)"),
+                        "Yes" if r["flagged"] else "",
+                        _FLAG_PREFIX_RE.sub("", r["reason"]),
+                    ])
+
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    f_title = wb.add_format({"bold": True, "font_size": 14})
+    f_sub = wb.add_format({"font_color": "#6b7280"})
+    f_hdr = wb.add_format({
+        "bold": True, "font_color": "#ffffff", "bg_color": "#1f3a68",
+        "border": 1, "text_wrap": True, "valign": "vcenter",
+    })
+    f_cell = wb.add_format({"valign": "top", "text_wrap": True})
+    f_code = wb.add_format({"valign": "top"})
+    f_flag = wb.add_format(
+        {"valign": "top", "text_wrap": True, "font_color": "#c0392b"}
+    )
+
+    ws = wb.add_worksheet("Concordance")
+    ws.write(0, 0, "Grid-equipment HS concordance", f_title)
+    ws.write(
+        1, 0,
+        f"Maps Canadian trade HS codes to grid-equipment categories. Whole "
+        f"HS-6 rows include every detail code beneath them; carve-out rows "
+        f"pin the category to the listed HS-10/HS-8 codes only. Source: "
+        f"{EQUIPMENT_CATEGORIES_FILE.name}, generated "
+        f"{datetime.date.today().isoformat()}.",
+        f_sub,
+    )
+    hr = 3
+    for c, h in enumerate(headers):
+        ws.write(hr, c, h, f_hdr)
+    for i, row in enumerate(rows, start=hr + 1):
+        flagged = row[8] == "Yes"
+        for c, v in enumerate(row):
+            if flagged and c in (8, 9):
+                fmt = f_flag
+            elif c in (1, 3, 5):
+                fmt = f_code
+            else:
+                fmt = f_cell
+            ws.write(i, c, v, fmt)
+    for c, w in enumerate([34, 8, 38, 8, 44, 13, 44, 26, 9, 58]):
+        ws.set_column(c, c, w)
+    ws.freeze_panes(hr + 1, 0)
+    ws.autofilter(hr, 0, hr + len(rows), len(headers) - 1)
+
+    ws2 = wb.add_worksheet("Category notes")
+    ws2.write(0, 0, "Equipment category", f_hdr)
+    ws2.write(0, 1, "Notes", f_hdr)
+    r = 1
+    for e in entries:
+        intro = " ".join(e["intro"]).strip()
+        if intro:
+            ws2.write(r, 0, e["name"], f_cell)
+            ws2.write(r, 1, intro, f_cell)
+            r += 1
+    ws2.set_column(0, 0, 34)
+    ws2.set_column(1, 1, 110)
+
+    wb.close()
+    return buf.getvalue()
+
+
 def page_categorization():
     st.title("Equipment Categorization")
     st.markdown(
@@ -2135,6 +2255,13 @@ def page_categorization():
     hd = df_all[["hs6", "hs_description"]].dropna(subset=["hs6"]).drop_duplicates("hs6")
     hs6_desc = dict(zip(hd["hs6"], hd["hs_description"].fillna("")))
     _, hs4_desc = load_hs_priority(HS4_PRIORITY_FILE)
+
+    _excel_download(
+        _concordance_xlsx(entries, hs4_desc, hs6_desc),
+        "equipment_categories_concordance.xlsx",
+        "Download concordance (Excel)",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
     names = [e["name"] for e in entries]
     pick = st.selectbox("Jump to category", ["All categories"] + names)

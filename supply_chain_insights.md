@@ -83,9 +83,17 @@ the upstream materials that feed it.
 | Reactive-power equipment | $0.19B | U.S. 29%, China 23% | 61% | 0.16 |
 | Large power transformer (>100 MVA) *(contrast)* | $0.20B | Korea 21%, Poland 16% | 53% | 0.14 |
 
-*HVDC converters are omitted: the HS-6 `850440` is heavily diluted by consumer
-power supplies and chargers, and a grid-relevant figure requires the high-power
-HS-10 carve-out.*
+*HVDC converters are omitted. The HS-6 `850440` is heavily diluted by consumer
+power supplies and chargers, and even the high-power HS-10 carve-out (semiconductor
+converters with a converting element >100 A, ~$9.9B of the $20.8B HS-6 total) does
+not isolate transmission equipment: its largest code, `8504409032` inverters
+(~$3.0B), is dominated by solar, wind and battery-storage inverters — generation-side
+equipment outside this study's scope — and roughly half the remainder sits in the
+`8504409099` "static converters, nes" catch-all, whose grid relevance cannot be
+verified. With only a handful of HVDC links in Canada, a concentration figure built
+on these codes would measure renewable-inverter and generic power-electronics
+suppliers, not HVDC converter-station suppliers, so no row is shown rather than a
+misleading one.*
 
 **Table 2. Supplier concentration of upstream feedstock & materials, Canadian imports 2025**
 
