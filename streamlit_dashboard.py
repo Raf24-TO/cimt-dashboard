@@ -2099,8 +2099,8 @@ def _concordance_xlsx(
     Sheet 1 (*Concordance*) is the flat mapping table — one row per assigned
     HS code: whole HS-6 assignments get a single row, HS-10 carve-outs one
     row per pinned detail code. Each equipment category gets its own row
-    color. The Raw Materials category and HS-8 export codes are excluded —
-    the concordance covers installed equipment on the import side only.
+    color. HS-8 export codes are excluded — the concordance covers the
+    import side only.
     Weak/forced fits carry "Yes" in the Flagged column with the reasoning in
     Notes (shown in red, like the page). Sheet 2 (*Category notes*) holds
     each category's caveat paragraph. Returns the .xlsx file bytes."""
@@ -2109,11 +2109,8 @@ def _concordance_xlsx(
         "HS-6 description", "Detail code", "Detail description",
         "Coverage", "Flagged", "Notes",
     ]
-    equipment = [
-        e for e in entries if e["name"].strip().lower() != "raw materials"
-    ]
     rows: list[tuple[int, list[str]]] = []  # (category index, row cells)
-    for ci, e in enumerate(equipment):
+    for ci, e in enumerate(entries):
         # Same HS-4 → HS-6 → {whole, carve-outs} grouping as the page table.
         tree: dict[str, dict[str, dict]] = {}
         for r in e["rows"]:
@@ -2162,6 +2159,7 @@ def _concordance_xlsx(
     palette = [
         "#DCE6F1", "#E2EFDA", "#FFF2CC", "#FCE4D6", "#EAD1DC",
         "#D9E1F2", "#D6F5E3", "#FDE9D9", "#E4DFEC", "#DAEEF3",
+        "#EBF1DE",
     ]
     cat_fmt: dict[int, tuple] = {}
     for ci in {c for c, _ in rows}:
@@ -2182,8 +2180,8 @@ def _concordance_xlsx(
         1, 0,
         f"Maps Canadian import HS codes to grid-equipment categories. Whole "
         f"HS-6 rows include every detail code beneath them; carve-out rows "
-        f"pin the category to the listed HS-10 codes only. Raw materials "
-        f"and export-side codes are excluded. Source: "
+        f"pin the category to the listed HS-10 codes only. Export-side "
+        f"codes are excluded. Source: "
         f"{EQUIPMENT_CATEGORIES_FILE.name}, generated "
         f"{datetime.date.today().isoformat()}.",
         f_sub,
@@ -2211,7 +2209,7 @@ def _concordance_xlsx(
     ws2.write(0, 0, "Equipment category", f_hdr)
     ws2.write(0, 1, "Notes", f_hdr)
     r = 1
-    for e in equipment:
+    for e in entries:
         intro = " ".join(e["intro"]).strip()
         if intro:
             ws2.write(r, 0, e["name"], f_cell)
