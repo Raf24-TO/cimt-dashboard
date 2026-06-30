@@ -72,6 +72,11 @@ def millions_fmt(ax):
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.0f}M"))
 
 
+def adj_note(fig, text):
+    """Small-font footnote stating the seasonal-adjustment basis of the series."""
+    fig.text(0.5, -0.02, text, ha="center", fontsize=9, style="italic", color="#777")
+
+
 def save(fig, name):
     path = OUT / name
     fig.savefig(path, dpi=130, bbox_inches="tight")
@@ -91,6 +96,7 @@ def chart_sales_trends(df):
     ax.set_ylabel("Sales per month")
     millions_fmt(ax)
     ax.legend(frameon=False, fontsize=12, loc="upper left")
+    adj_note(fig, "Sales (shipments) series: Unadjusted — not seasonally adjusted.")
     save(fig, "01_sales_trends.png")
 
 
@@ -106,6 +112,7 @@ def chart_sales_indexed(df):
     ax.set_title("Sales growth indexed to 2016 average = 100", fontweight="bold")
     ax.set_ylabel("Index (2016 = 100)")
     ax.legend(frameon=False, fontsize=12, loc="upper left")
+    adj_note(fig, "Sales (shipments) series: Unadjusted — not seasonally adjusted.")
     save(fig, "02_sales_indexed.png")
 
 
@@ -129,8 +136,8 @@ def chart_inventory_components(df):
     axes[0].set_ylabel("Inventory value (end of month)")
     axes[0].legend(frameon=False, fontsize=11, loc="upper left")
     fig.suptitle("Inventories by stage — priority electrical industries", fontweight="bold", y=1.02)
-    fig.text(0.5, -0.02, "Suppressed months linearly interpolated between available values; Wire & cable has the most gaps.",
-             ha="center", fontsize=11, style="italic", color="#666")
+    adj_note(fig, "Inventory series (raw materials, work in process, finished goods): Unadjusted — not seasonally adjusted. "
+                  "Suppressed months linearly interpolated between available values; Wire & cable has the most gaps.")
     save(fig, "03_inventory_components.png")
 
 
@@ -149,6 +156,7 @@ def chart_orders(df):
     ax2.set_title("Unfilled orders — backlog at end of month", fontweight="bold")
     ax2.set_ylabel("Value")
     millions_fmt(ax2)
+    adj_note(fig, "Both statistics (new orders & unfilled orders): Unadjusted — not seasonally adjusted.")
     save(fig, "04_orders.png")
 
 
@@ -163,6 +171,7 @@ def chart_inv_sales_ratio(df):
     ax.set_title("Inventory-to-sales ratio (total inventory ÷ monthly sales)", fontweight="bold")
     ax.set_ylabel("Ratio")
     ax.legend(frameon=False, fontsize=12, loc="upper left")
+    adj_note(fig, "Both statistics (total inventory & sales): Unadjusted — not seasonally adjusted.")
     save(fig, "05_inventory_to_sales_ratio.png")
 
 
@@ -188,12 +197,13 @@ def chart_unfilled_to_sales(df):
             ax.text(0.99, 0.02, f"backlog data ends {valid.index.max():%Y-%m}",
                     transform=ax.transAxes, ha="right", fontsize=10,
                     style="italic", color="#666")
+        adj_note(fig, "Both statistics (unfilled orders & sales): Unadjusted — not seasonally adjusted.")
         save(fig, f"06_unfilled_to_sales_{code}.png")
 
 
 # -------- 7. Unfilled-to-sales ratio for the parent group NAICS 3353 (rollup)
 def chart_ratio_3353(df):
-    code, label, color = "3353", "Electrical equipment mfg", "#6a4c93"
+    code, label, color = "3353", "Electrical equipment manufacturing", "#6a4c93"
     unf = series(df, UNFILLED, code)
     sales = series(df, SHIPMENTS, code)
     ratio = unf / sales
@@ -207,7 +217,31 @@ def chart_ratio_3353(df):
     ax.set_ylabel("Ratio")
     ax.set_ylim(bottom=0)
     ax.legend(frameon=False, fontsize=12, loc="upper left")
+    adj_note(fig, "Both statistics (unfilled orders & sales): Unadjusted — not seasonally adjusted.")
     save(fig, "07_unfilled_to_sales_3353.png")
+
+
+# -------- 7b. Unfilled-to-sales ratio for the sector NAICS 335 (rollup)
+def chart_ratio_335(df):
+    code, label, color = "335", "Electrical equipment, appliance & component manufacturing", "#6a4c93"
+    # 335 carries both adjusted and unadjusted series; match 3353's unadjusted basis
+    df = df[df["Seasonal adjustment"] == "Unadjusted"]
+    unf = series(df, UNFILLED, code)
+    sales = series(df, SHIPMENTS, code)
+    ratio = unf / sales
+    roll = ratio.rolling(6, min_periods=4).mean()
+    fig, ax = plt.subplots(figsize=(13, 6.5))
+    ax.plot(ratio.index, ratio.values, color=color, lw=1.0, alpha=0.35, label="Monthly")
+    ax.plot(roll.index, roll.values, color=color, lw=2.8, label="6-mo avg")
+    valid = ratio.dropna()
+    ax.axhline(valid.mean(), ls="--", lw=1.1, color="#888", label=f"mean = {valid.mean():.1f}")
+    ax.set_title(f"Unfilled orders ÷ sales — {label} [{code}]", fontweight="bold")
+    ax.set_ylabel("Ratio")
+    ax.set_ylim(bottom=0)
+    ax.legend(frameon=False, fontsize=12, loc="upper left")
+    adj_note(fig, "Both statistics (unfilled orders & sales): Unadjusted — not seasonally adjusted. "
+                  "(335 also publishes a seasonally adjusted series; unadjusted shown to match the 3353 chart.)")
+    save(fig, "07b_unfilled_to_sales_335.png")
 
 
 def main():
@@ -219,6 +253,7 @@ def main():
     chart_inv_sales_ratio(df)
     chart_unfilled_to_sales(df)
     chart_ratio_3353(df)
+    chart_ratio_335(df)
     print(f"\nAll charts written to {OUT}")
 
 
