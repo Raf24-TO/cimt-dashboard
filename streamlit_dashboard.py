@@ -136,13 +136,17 @@ def _path_signature(path: Path) -> tuple[str, float, int]:
 
 
 @st.cache_data(show_spinner="Loading trade data…")
-def load_data(signature: tuple[str, float, int] | None = None) -> pd.DataFrame:
+def load_data(
+    signature: tuple[str, float, int] | None = None,
+    carveout_signature: tuple[str, float, int] | None = None,
+) -> pd.DataFrame:
     """Prefer the slim Parquet (committed to git for cloud deploy); fall back to
     the full CSV produced by extract_cimt_trade.py for local development.
 
-    The signature parameter is unused inside the body — it exists only to
-    invalidate the cache when the source file's mtime/size change."""
-    del signature  # only consumed by @st.cache_data's hashing
+    The signature parameters are unused inside the body — they exist only to
+    invalidate the cache when the source data file or equipment_categories.md
+    (which drives the detail-code carve-out below) change on disk."""
+    del signature, carveout_signature  # only consumed by @st.cache_data's hashing
     if LONG_PARQUET.exists():
         df = pd.read_parquet(LONG_PARQUET)
     else:
@@ -159,6 +163,16 @@ def load_data(signature: tuple[str, float, int] | None = None) -> pd.DataFrame:
         df["unit_1"] = pd.NA
     if "hs6" in df.columns:
         df = df[~df["hs6"].isin(EXCLUDED_HS6)].copy()
+    # Drop detail codes outside the grid-relevant carve-out so every total —
+    # including the "All" selection — sums only in-scope HS-10/HS-8 codes.
+    # e.g. 850440 keeps grid converters/rectifiers/inverters but drops PC power
+    # supplies, battery chargers and motor-drive speed controllers.
+    restrict = equipment_carveout(_path_signature(EQUIPMENT_CATEGORIES_FILE))
+    if restrict and {"hs6", "hs_full"} <= set(df.columns):
+        drop = pd.Series(False, index=df.index)
+        for h, allowed in restrict.items():
+            drop |= (df["hs6"] == h) & (~df["hs_full"].isin(allowed))
+        df = df[~drop].copy()
     return df
 
 
@@ -246,6 +260,36 @@ def load_equipment_categories(
         elif len(code) in (8, 10):
             cur["full"].add(code)
     return [c for c in out if c["hs6"] or c["full"]]
+
+
+@st.cache_data
+def equipment_carveout(sig: tuple[str, float, int] | None = None) -> dict[str, set[str]]:
+    """Global HS-10/HS-8 carve-out across every equipment category.
+
+    Returns ``{hs6: {allowed detail codes}}`` for each HS-6 that is pinned to
+    specific HS-10/HS-8 detail codes in equipment_categories.md and is *not*
+    taken whole by any other category. Detail rows of these HS-6 codes that
+    fall outside the allowed set are not grid-relevant (e.g. PC power supplies,
+    phone chargers and motor-drive controllers riding inside 850440) and are
+    dropped at data load, so every total — including the "All" selection —
+    sums only in-scope codes.
+
+    ``sig`` is unused; it lets st.cache_data reparse when the file changes.
+    """
+    cats = load_equipment_categories(
+        EQUIPMENT_CATEGORIES_FILE, _path_signature(EQUIPMENT_CATEGORIES_FILE)
+    )
+    whole: set[str] = set()
+    restrict: dict[str, set[str]] = {}
+    for c in cats:
+        whole |= c["hs6"]
+        for f in c["full"]:
+            restrict.setdefault(f[:6], set()).add(f)
+    # A parent taken whole in any category wins — drop its restriction.
+    for h in list(restrict):
+        if h in whole:
+            del restrict[h]
+    return restrict
 
 
 def fmt_cad(v: float) -> str:
@@ -376,7 +420,9 @@ def page_dashboard():
         )
         st.stop()
 
-    df_all = load_data(_data_file_signature())
+    df_all = load_data(
+        _data_file_signature(), _path_signature(EQUIPMENT_CATEGORIES_FILE)
+    )
     coords = load_coords()
 
     # ------------------------------------------------------------------
@@ -2257,7 +2303,9 @@ def page_categorization():
     c4.metric("Flagged", n_flag)
 
     # Data for HS-10 detail children + descriptions (imports expose 10-digit).
-    df_all = load_data(_data_file_signature())
+    df_all = load_data(
+        _data_file_signature(), _path_signature(EQUIPMENT_CATEGORIES_FILE)
+    )
     imp = df_all[df_all["flow"] == "imports"] if "flow" in df_all.columns else df_all
     hs6_to_detail: dict[str, list] = {}
     ch = (
@@ -2404,7 +2452,9 @@ def page_major_importers():
     )
 
     # HS-6 descriptions from the trade data.
-    trade = load_data(_data_file_signature())
+    trade = load_data(
+        _data_file_signature(), _path_signature(EQUIPMENT_CATEGORIES_FILE)
+    )
     hd = trade[["hs6", "hs_description"]].dropna(subset=["hs6"]).drop_duplicates("hs6")
     hs6_desc = dict(zip(hd["hs6"], hd["hs_description"].fillna("")))
 
