@@ -80,7 +80,7 @@ code is broad or partly non-grid — see the reasoning in `equipment_categories.
 | **High-Voltage Switchgear** | `853510`, `853529`, `853590`, `853540`⚠ |
 | **Medium-Voltage Switchgear** | `853521`⚠, `853610`⚠, `853620`⚠, `853630`⚠, `853650`⚠, `853690`⚠ (8536 = ≤1 kV, technically LV, folded in) |
 | **Underground / Submarine Cable** | `854460`; `854420`⚠ (coax), `854442`⚠, `854449`⚠ (LV) |
-| **HVDC Converter Station** | `850440` → HS-10 high-power subset (see §5) |
+| **Static power converters (incl. HVDC)** | `850440` → HS-10 high-power subset (see §5) |
 | **Overhead Conductor** | `741300` (bare Cu), `761410` (ACSR), `761490` (Al), `730820`⚠ (towers) |
 | **Substation reactive-power equipment** (shunt reactors, capacitor banks, SVC/STATCOM) | `853210`; `850450`⚠ (inductors), `853229`⚠, `853230`⚠, `853290`⚠ (capacitors) |
 | **Protection & Control panels** | `853710`, `853720`, `853649`; `853641`⚠ (relays). *(HS-4 9030 measuring instruments excluded — non-grid lab/test gear.)* |
@@ -104,11 +104,13 @@ codes so the category captures only the grid-relevant slice. These apply to the
   *Medium / Substation Transformer*. **This series is imports-only and starts
   in 2019** (the >100 MVA band wasn't reported separately before then).
 
-- **HVDC Converter Station** = the high-power converter HS-10 codes under
-  `850440` — `8504409031/032/033/034/035/039` (rectifiers, inverters, DC/AC
+- **Static power converters (incl. HVDC)** = the high-power converter HS-10 codes
+  under `850440` — `8504409031/032/033/034/035/039` (rectifiers, inverters, DC/AC
   converters, ">100 A" devices) plus the catch-all `8504409099` and the HS-8
   export code `85044000`. This **excludes** PC/IT power supplies, battery/USB
-  chargers, and motor speed-drive controllers (the bulk of raw `850440`).
+  chargers, and motor speed-drive controllers (the bulk of raw `850440`). The HS
+  cannot separate HVDC converters from solar PV inverters / UPS / industrial
+  converters, so this is all high-power static converters, not HVDC alone.
 
 Consequence: a category restricted to HS-10 shows **no data** for domestic
 exports / pre-2019 imports where those detail codes don't exist — the dashboard

@@ -20,10 +20,11 @@ Decisions applied per your review:
   850423 (lower bands, exports, pre-2019 imports) drops to *Medium / Substation Transformer*.
   Note: this category is therefore **imports-only, 2019 onward** — HS-8 exports and 2016–2018
   imports have no >100 MVA breakout.
-- **HVDC Converter Station refined at HS-10** → high-power converter codes only (drops PC/IT
-  power supplies, battery/USB chargers, motor drives), cutting the import base from $20.8B to
-  ~$9.9B. Includes the `8504409099` "static converters, nes" catch-all (flagged). Exports
-  (HS-8 `85044000`) can't be refined.
+- **Static power converters (incl. HVDC) refined at HS-10** → high-power converter codes only
+  (drops PC/IT power supplies, battery/USB chargers, motor drives), cutting the 2025 import base
+  from ~$2.8B to $1,409M. Includes the `8504409099` "static converters, nes" catch-all (flagged)
+  and the inverter line `8504409032` (flagged — HS can't split solar PV / UPS from grid). Exports
+  (HS-8 `85044000`) can't be refined. Not HVDC alone — see §6.
 - **Underground / Submarine Cable** → kept whole at HS-6 (`854460` = all HV insulated power
   cable). The submarine-specific HS-10 (`8544601000`) is noted only as an optional sub-figure,
   not the definition (narrowing to it would drop all underground cable).
@@ -90,23 +91,32 @@ isolates the explicitly-submarine slice if you ever want an "of which submarine"
 | 854442 | Insulated conductors ≤1,000 V, w/ connectors | ⚠ FLAG — LV cable, much non-grid; forced to nearest cable bucket. |
 | 854449 | Insulated conductors ≤80 V, nes | ⚠ FLAG — LV/electronics wiring; forced to nearest cable bucket. |
 
-## 6. HVDC Converter Station
+## 6. Static power converters (incl. HVDC)
 
 Refined at **HS-10** (imports) to high-power converters; exports are a single
-un-splittable HS-8 code. Excludes PC/ADP power supplies ($2.0B), generic power
-supplies nes ($4.2B), battery/USB chargers ($1.7B), and motor speed-drive
-controllers ($1.7B) — all non-grid.
+un-splittable HS-8 code. Excludes PC/ADP power supplies, generic power supplies
+nes, battery/USB chargers, and motor speed-drive controllers (the bulk of raw
+`850440`, ~$1.4B/yr) — all non-grid.
 
-| Code | Level | Description | Value (imp) | Reasoning |
-|------|-------|-------------|-------------|-----------|
-| 8504409032 | HS-10 | Inverters (incl. >100 A converting element) | $2,990M | High-power inverter — grid/solar. |
-| 8504409035 | HS-10 | Power supplies, with a device >100 A | $447M | High-power industrial converter. |
-| 8504409039 | HS-10 | Semiconductor converters, >100 A | $436M | High-power converter. |
-| 8504409031 | HS-10 | Rectifiers, with/without device >100 A | $432M | High-power AC→DC. |
-| 8504409034 | HS-10 | Direct current converters, >100 A | $420M | High-power DC. |
-| 8504409033 | HS-10 | AC & cycle converters, >100 A | $166M | High-power converter. |
-| 8504409099 | HS-10 | Static converters, nes | $4,993M | ⚠ FLAG — catch-all; ~half the category, grid relevance uncertain (included per review). |
-| 85044000 | HS-8 | Static electric converters, nes (domestic exports) | $3,967M (exp) | ⚠ FLAG — exports can't be refined; includes the same non-grid mix as imports. |
+Values below are **2025 imports**, after the carve-out. The seven HS-10 codes
+total **$1,409M**.
+
+| Code | Level | Description | 2025 imports | Reasoning |
+|------|-------|-------------|--------------|-----------|
+| 8504409099 | HS-10 | Static converters, nes | $899.4M | ⚠ FLAG — catch-all; ~64% of the category, grid relevance uncertain (included per review). |
+| 8504409032 | HS-10 | Inverters (incl. >100 A converting element) | $271.5M | ⚠ FLAG — high-power inverter; HS does not separate solar PV / UPS from grid. |
+| 8504409031 | HS-10 | Rectifiers, with/without device >100 A | $61.9M | High-power AC→DC. |
+| 8504409039 | HS-10 | Semiconductor converters, >100 A | $61.1M | High-power converter. |
+| 8504409034 | HS-10 | Direct current converters, >100 A | $50.3M | High-power DC. |
+| 8504409035 | HS-10 | Power supplies, with a device >100 A | $44.7M | High-power industrial converter. |
+| 8504409033 | HS-10 | AC & cycle converters, >100 A | $20.1M | High-power converter. |
+| 85044000 | HS-8 | Static electric converters, nes (domestic exports) | — (exports) | ⚠ FLAG — exports can't be refined; includes the same non-grid mix as imports. |
+
+> **Note.** HS 8504.40 ("static converters") does not separate HVDC converter
+> equipment from solar PV inverters, UPS, and general industrial converters, so
+> this category captures all high-power static converters — not HVDC alone. The
+> steady ~$1.4B/yr flow is dominated by the *nes* residual and inverters; genuine
+> HVDC converter-station equipment is only an occasional, project-driven slice of it.
 
 ## 7. Overhead Conductor
 
