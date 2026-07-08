@@ -78,6 +78,18 @@ UNCERTAIN_HS10: set[str] = {
     "8537109990", "8537109300", "8536490090",
 }
 
+# HS-6 headings that are wholly non-grid (every one of their in-scope HS-10 codes
+# is in EXCLUDED_HS10): other LV switches, connection apparatus, LV protective
+# apparatus n.e.s., electric inductors, LV relays ≤60 V, connectorized cordsets,
+# and coaxial cable. Dropped WHOLESALE at HS-6 (not just the current HS-10 codes)
+# so historical code-variants of the same products are removed too — otherwise
+# earlier years keep old variants and the year-over-year trend is distorted.
+# Kept separate from EXCLUDED_HS6 (which carries a "sub-scale transformer"
+# meaning used by the concordance page).
+EXCLUDED_HS6_NONGRID: set[str] = {
+    "853650", "853690", "853630", "850450", "853641", "854442", "854420",
+}
+
 # Complete HS-6 nomenclature under every HS-4 heading we use (89 codes), so the
 # concordance can show sibling HS-6 codes we don't use (struck through). HS-4
 # heading descriptions for the same set.
@@ -224,7 +236,9 @@ def load_data(
     if not apply_scope:
         return df
     if "hs6" in df.columns:
-        df = df[~df["hs6"].isin(EXCLUDED_HS6)].copy()
+        # Sub-scale transformers + wholly-non-grid headings, dropped at HS-6 so
+        # historical code-variants go too (keeps multi-year trends consistent).
+        df = df[~df["hs6"].isin(EXCLUDED_HS6 | EXCLUDED_HS6_NONGRID)].copy()
     # Drop detail codes outside the grid-relevant carve-out so every total —
     # including the "All" selection — sums only in-scope HS-10/HS-8 codes.
     # e.g. 850440 keeps grid converters/rectifiers/inverters but drops PC power
@@ -2639,7 +2653,7 @@ def load_major_importers() -> pd.DataFrame:
     if not MAJOR_IMPORTERS_PARQUET.exists():
         return pd.DataFrame()
     df = pd.read_parquet(MAJOR_IMPORTERS_PARQUET)
-    return df[~df["hs6"].isin(EXCLUDED_HS6)].copy()
+    return df[~df["hs6"].isin(EXCLUDED_HS6 | EXCLUDED_HS6_NONGRID)].copy()
 
 
 def page_major_importers():
