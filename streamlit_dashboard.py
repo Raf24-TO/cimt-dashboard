@@ -47,6 +47,60 @@ EXCLUDED_HS6: set[str] = {
     "850431", "850432",
     "903031", "903032", "903033", "903039", "903084", "903089",
 }
+
+# HS-10 detail codes excluded on 7 July 2026 after the code-level scope audit
+# (see HS10_scope_exclusions.xlsx). These fall outside the "generator terminal →
+# customer meter" grid boundary — behind-the-meter building/industrial/machinery
+# apparatus, generation-side inverters, consumer/IT power supplies, data/coax
+# cable and wiring accessories — swept in by broad HS-6 codes. Dropped from every
+# trade number at data load; still shown (flagged) on the Equipment Categorization
+# page for transparency.
+EXCLUDED_HS10: set[str] = {
+    "8535903000",
+    "8536509090", "8536900090", "8536309090", "8536900020", "8536900010",
+    "8536509019", "8536509011", "8536509030", "8536501000", "8536509050",
+    "8536509060", "8536509040", "8536509020", "8536309010", "8536302000", "8536301000",
+    "8544420090", "8544200000", "8544420010",
+    "8504409099", "8504409032", "8504409035",
+    "8504500000", "8532290000", "8532300000", "8532900000",
+    "8537109920", "8537103999", "8537103992", "8537109100", "8537103991",
+    "8537101990", "8537102910", "8536490030", "8537101910", "8536410099",
+    "8537102100", "8537102990", "8536490040", "8537101100", "8536410091",
+    "8536410092", "8536490010", "8536410019", "8537103910", "8537103100",
+    "8536410011", "8537109930", "8536410020", "8536490020",
+}
+# HS-10 codes flagged 7 July 2026 as uncertain — plausibly grid LV-distribution
+# up to the meter but dominated by non-grid use and impossible to isolate. Kept in
+# the trade numbers; highlighted amber with an "uncertain" note in the concordance.
+UNCERTAIN_HS10: set[str] = {
+    "8544490019", "8544490090",
+    "8504409031", "8504409039", "8504409034", "8504409033",
+    "8537109990", "8537109300", "8536490090",
+}
+
+# Complete HS-6 nomenclature under every HS-4 heading we use (89 codes), so the
+# concordance can show sibling HS-6 codes we don't use (struck through). HS-4
+# heading descriptions for the same set.
+HS6_REFERENCE_FILE = ROOT / "hs6_reference.csv"
+HS4_HEADINGS: dict[str, str] = {
+    "7225": "Flat-rolled other alloy steel, width ≥600 mm",
+    "7226": "Flat-rolled other alloy steel, width <600 mm",
+    "7308": "Structures and parts of structures, of iron or steel",
+    "7407": "Copper bars, rods and profiles",
+    "7408": "Copper wire",
+    "7413": "Stranded copper wire and cable, not insulated",
+    "7604": "Aluminium bars, rods and profiles",
+    "7605": "Aluminium wire",
+    "7614": "Stranded aluminium wire and cable, not insulated",
+    "8504": "Electrical transformers, static converters and inductors",
+    "8532": "Electrical capacitors",
+    "8535": "Switching/protecting apparatus for circuits, >1,000 V",
+    "8536": "Switching/protecting apparatus for circuits, ≤1,000 V",
+    "8537": "Boards, panels, consoles for electric control or distribution",
+    "8544": "Insulated wire, cable and other insulated conductors",
+    "8546": "Electrical insulators",
+    "8547": "Insulating fittings for electrical machines/appliances; conduit",
+}
 LOGO_PATH = ROOT / "assets" / "transition_accelerator.png"
 CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 
@@ -139,13 +193,19 @@ def _path_signature(path: Path) -> tuple[str, float, int]:
 def load_data(
     signature: tuple[str, float, int] | None = None,
     carveout_signature: tuple[str, float, int] | None = None,
+    apply_scope: bool = True,
 ) -> pd.DataFrame:
     """Prefer the slim Parquet (committed to git for cloud deploy); fall back to
     the full CSV produced by extract_cimt_trade.py for local development.
 
     The signature parameters are unused inside the body — they exist only to
     invalidate the cache when the source data file or equipment_categories.md
-    (which drives the detail-code carve-out below) change on disk."""
+    (which drives the detail-code carve-out below) change on disk.
+
+    apply_scope=True (default) applies every scope filter — excluded HS-6, the
+    850440 carve-out, and the 7-July HS-10 exclusions — so all trade numbers are
+    clean. Pass apply_scope=False for the raw dataset (used by the Equipment
+    Categorization page, which shows excluded codes with a flag)."""
     del signature, carveout_signature  # only consumed by @st.cache_data's hashing
     if LONG_PARQUET.exists():
         df = pd.read_parquet(LONG_PARQUET)
@@ -161,6 +221,8 @@ def load_data(
         df["quantity_1"] = pd.to_numeric(df["quantity_1"], errors="coerce").fillna(0)
     if "unit_1" not in df.columns:
         df["unit_1"] = pd.NA
+    if not apply_scope:
+        return df
     if "hs6" in df.columns:
         df = df[~df["hs6"].isin(EXCLUDED_HS6)].copy()
     # Drop detail codes outside the grid-relevant carve-out so every total —
@@ -173,6 +235,9 @@ def load_data(
         for h, allowed in restrict.items():
             drop |= (df["hs6"] == h) & (~df["hs_full"].isin(allowed))
         df = df[~drop].copy()
+    # Drop the 7-July 2026 code-level exclusions from every trade number.
+    if "hs_full" in df.columns:
+        df = df[~df["hs_full"].isin(EXCLUDED_HS10)].copy()
     return df
 
 
@@ -290,6 +355,40 @@ def equipment_carveout(sig: tuple[str, float, int] | None = None) -> dict[str, s
         if h in whole:
             del restrict[h]
     return restrict
+
+
+@st.cache_data
+def load_hs6_reference(sig: tuple[str, float, int] | None = None) -> dict[str, dict[str, str]]:
+    """Complete HS-6 nomenclature per HS-4 heading, from hs6_reference.csv.
+
+    Returns ``{hs4: {hs6: description}}`` covering every HS-6 that exists under
+    the headings we use — including the ones not in the concordance — so the
+    Equipment Categorization page can show them struck through. ``sig`` only
+    invalidates the cache when the file changes."""
+    if not HS6_REFERENCE_FILE.exists():
+        return {}
+    ref = pd.read_csv(HS6_REFERENCE_FILE, dtype=str).fillna("")
+    out: dict[str, dict[str, str]] = {}
+    for r in ref.itertuples(index=False):
+        out.setdefault(str(r.hs4), {})[str(r.hs6)] = str(r.description)
+    return out
+
+
+def _concordance_maps(cats: list[dict]) -> tuple[dict, dict, dict]:
+    """From parsed categories → (whole_map, full_map, owner) keyed by code.
+
+    whole_map[hs6] = category taking the whole HS-6; full_map[hs10] = category a
+    carve-out detail code belongs to; owner[hs6] = the category that owns an HS-6
+    (whole, else the category of its carve-out detail codes)."""
+    whole_map: dict[str, str] = {}
+    full_map: dict[str, str] = {}
+    owner: dict[str, str] = {}
+    for c in cats:
+        for h6 in c["hs6"]:
+            whole_map[h6] = c["name"]; owner.setdefault(h6, c["name"])
+        for f in c["full"]:
+            full_map[f] = c["name"]; owner.setdefault(f[:6], c["name"])
+    return whole_map, full_map, owner
 
 
 def fmt_cad(v: float) -> str:
@@ -2134,62 +2233,89 @@ def _category_entries(
     return [c for c in cats if c["rows"]]
 
 
-_FLAG_PREFIX_RE = re.compile(r"^⚠\s*FLAG\s*[—–-]\s*")
-
-
 def _concordance_xlsx(
-    entries: list[dict], hs4_desc: dict[str, str], hs6_desc: dict[str, str]
+    entries: list[dict], hs4_desc: dict[str, str], ctx: dict
 ) -> bytes:
-    """Build the equipment-category concordance workbook.
+    """Build the master-concordance workbook, mirroring the on-page display.
 
-    Sheet 1 (*Concordance*) is the flat mapping table — one row per assigned
-    HS code: whole HS-6 assignments get a single row, HS-10 carve-outs one
-    row per pinned detail code. Each equipment category gets its own row
-    color. HS-8 export codes are excluded — the concordance covers the
-    import side only.
-    Weak/forced fits carry "Yes" in the Flagged column with the reasoning in
-    Notes (shown in red, like the page). Sheet 2 (*Category notes*) holds
-    each category's caveat paragraph. Returns the .xlsx file bytes."""
+    Sheet 1 (*Concordance*): categories in order; under each, every HS-6 of its
+    HS-4 headings — HS-6 belonging to another category or not in the concordance
+    are struck through with a cross-reference. HS-10 detail carries its latest-year
+    import value and status. Red = excluded 7 Jul 2026 (removed from trade numbers);
+    amber = uncertain (kept, flagged); grey strikethrough = not used. Sheet 2
+    (*Category notes*) holds each category's caveat paragraph."""
+    whole_map, full_map, owner = ctx["whole"], ctx["full"], ctx["owner"]
+    ref, h10_by_h6, v_latest = ctx["ref"], ctx["h10_by_h6"], ctx["v_latest"]
+    h10desc, hs6_desc, flag = ctx["h10desc"], ctx["hs6_desc"], ctx["flag"]
+    yr = ctx["yr"]
+
+    def _hs6d(h6):
+        return hs6_desc.get(h6) or ref.get(h6[:4], {}).get(h6, "")
+
+    def _show(cat, h6):
+        out = []
+        for hf in h10_by_h6.get(h6, []):
+            a = full_map.get(hf) or whole_map.get(h6)
+            if a == cat or (a is None and owner.get(h6) == cat):
+                out.append(hf)
+        return out
+
+    def _belongs(cat, h6):
+        return (bool(_show(cat, h6)) or whole_map.get(h6) == cat
+                or (h6 in EXCLUDED_HS6 and owner.get(h6) == cat))
+
+    def _status(hf, h6):
+        if h6 in EXCLUDED_HS6:
+            return "Not used"
+        if hf in EXCLUDED_HS10:
+            return "Excluded"
+        if hf in UNCERTAIN_HS10:
+            return "Uncertain"
+        if full_map.get(hf) or whole_map.get(h6):
+            return "In scope"
+        return "Not used"
+
     headers = [
-        "Equipment category", "HS-4", "HS-4 description", "HS-6",
-        "HS-6 description", "Detail code", "Detail description",
-        "Coverage", "Flagged", "Notes",
+        "Equipment category", "HS-4", "HS-4 heading", "HS-6", "HS-6 description",
+        "HS-10", "HS-10 description", f"{yr} imports ($M)", "Status", "Change log / note",
     ]
-    rows: list[tuple[int, list[str]]] = []  # (category index, row cells)
+    # rows: (category index, cells[10], status, struck, forced_note)
+    rows: list[tuple] = []
     for ci, e in enumerate(entries):
-        # Same HS-4 → HS-6 → {whole, carve-outs} grouping as the page table.
-        tree: dict[str, dict[str, dict]] = {}
-        for r in e["rows"]:
-            if len(r["code"]) == 8:  # export-side code — imports only
-                continue
-            node = tree.setdefault(r["code"][:4], {}).setdefault(
-                r["code"][:6], {"whole": None, "carve": []}
-            )
-            if len(r["code"]) == 6:
-                node["whole"] = r
-            else:
-                node["carve"].append(r)
-        for hs4 in sorted(tree):
-            for hs6 in sorted(tree[hs4]):
-                node = tree[hs4][hs6]
-                whole = node["whole"]
-                base = [
-                    e["name"], hs4, hs4_desc.get(hs4, ""), hs6,
-                    (whole["desc"] if whole and whole["desc"]
-                     else hs6_desc.get(hs6, "")),
-                ]
-                if whole:
-                    rows.append((ci, base + [
-                        "", "", "Whole HS-6 — all detail codes",
-                        "Yes" if whole["flagged"] else "",
-                        _FLAG_PREFIX_RE.sub("", whole["reason"]),
-                    ]))
-                for r in node["carve"]:
-                    rows.append((ci, base + [
-                        r["code"], r["desc"], "HS-10 carve-out (imports)",
-                        "Yes" if r["flagged"] else "",
-                        _FLAG_PREFIX_RE.sub("", r["reason"]),
-                    ]))
+        cat = e["name"]
+        hs4s = sorted(h4 for h4 in ref if any(_belongs(cat, h6) for h6 in ref[h4]))
+        for hs4 in hs4s:
+            for hs6 in sorted(ref[hs4]):
+                if not _belongs(cat, hs6):
+                    if hs6 in EXCLUDED_HS6:
+                        note = "Excluded — sub-scale transformer (≤16 kVA)"
+                    elif owner.get(hs6):
+                        note = f"Used in: {owner[hs6]}"
+                    else:
+                        note = "Not in concordance"
+                    rows.append((ci, [cat, hs4, hs4_desc.get(hs4, ""), hs6, _hs6d(hs6),
+                                      "—", "", "", "Other / not used", note], "Not used", True, False))
+                    continue
+                dets = _show(cat, hs6)
+                if not dets:
+                    rows.append((ci, [cat, hs4, hs4_desc.get(hs4, ""), hs6, _hs6d(hs6),
+                                      "—", "(no imports recorded)", "", "In scope", ""], "In scope", False, False))
+                for hf in sorted(dets, key=lambda x: -v_latest.get(x, 0)):
+                    stt = _status(hf, hs6)
+                    v = v_latest.get(hf, 0)
+                    vstr = f"{v/1e6:,.1f}" if v else ""
+                    note = ""
+                    if stt == "Excluded":
+                        note = "Excluded on 7 July 2026"
+                    elif stt == "Uncertain":
+                        note = "Flagged 7 July 2026 (uncertain)"
+                    elif stt == "Not used":
+                        note = "Out of scope (HS-6 carve-out)"
+                    elif hf in flag:
+                        note = flag[hf]
+                    rows.append((ci, [cat, hs4, hs4_desc.get(hs4, ""), hs6, _hs6d(hs6),
+                                      hf, h10desc.get(hf, ""), vstr, stt, note],
+                                 stt, stt == "Not used", hf in flag and stt == "In scope"))
 
     buf = io.BytesIO()
     wb = xlsxwriter.Workbook(buf, {"in_memory": True})
@@ -2200,53 +2326,57 @@ def _concordance_xlsx(
         "border": 1, "text_wrap": True, "valign": "vcenter",
     })
     f_cell = wb.add_format({"valign": "top", "text_wrap": True})
-
-    # One soft fill per equipment category so each block reads as a unit.
     palette = [
         "#DCE6F1", "#E2EFDA", "#FFF2CC", "#FCE4D6", "#EAD1DC",
-        "#D9E1F2", "#D6F5E3", "#FDE9D9", "#E4DFEC", "#DAEEF3",
-        "#EBF1DE",
+        "#D9E1F2", "#D6F5E3", "#FDE9D9", "#E4DFEC", "#DAEEF3", "#EBF1DE",
     ]
-    cat_fmt: dict[int, tuple] = {}
-    for ci in {c for c, _ in rows}:
-        bg = palette[ci % len(palette)]
-        common = {"valign": "top", "bg_color": bg,
-                  "border": 1, "border_color": "#ffffff"}
-        cat_fmt[ci] = (
-            wb.add_format({**common, "text_wrap": True}),
-            wb.add_format(common),
-            wb.add_format(
-                {**common, "text_wrap": True, "font_color": "#c0392b"}
-            ),
-        )
+    f_catA = {ci: wb.add_format({"valign": "top", "text_wrap": True, "bold": True,
+                                 "bg_color": palette[ci % len(palette)], "border": 1,
+                                 "border_color": "#ffffff", "font_size": 9})
+              for ci in {c for c, *_ in rows}}
+    f_plain = wb.add_format({"valign": "top", "text_wrap": True})
+    f_ctr = wb.add_format({"valign": "top", "align": "center"})
+    f_red = wb.add_format({"valign": "top", "text_wrap": True, "font_color": "#c0392b", "italic": True})
+    f_excl = wb.add_format({"valign": "top", "text_wrap": True, "bg_color": "#F4B6B6", "bold": True})
+    f_excl_c = wb.add_format({"valign": "top", "align": "center", "bg_color": "#F4B6B6"})
+    f_unc = wb.add_format({"valign": "top", "text_wrap": True, "bg_color": "#FCE0B0", "bold": True})
+    f_unc_c = wb.add_format({"valign": "top", "align": "center", "bg_color": "#FCE0B0"})
+    f_strk = wb.add_format({"valign": "top", "text_wrap": True, "font_strikeout": True, "font_color": "#808080"})
+    f_strk_c = wb.add_format({"valign": "top", "align": "center", "font_strikeout": True, "font_color": "#808080"})
+    f_grey = wb.add_format({"valign": "top", "text_wrap": True, "font_color": "#808080", "italic": True})
 
     ws = wb.add_worksheet("Concordance")
-    ws.write(0, 0, "Grid-equipment HS concordance", f_title)
+    ws.write(0, 0, "Master HS concordance — grid-equipment categories", f_title)
     ws.write(
         1, 0,
-        f"Maps Canadian import HS codes to grid-equipment categories. Whole "
-        f"HS-6 rows include every detail code beneath them; carve-out rows "
-        f"pin the category to the listed HS-10 codes only. Export-side "
-        f"codes are excluded. Source: "
-        f"{EQUIPMENT_CATEGORIES_FILE.name}, generated "
-        f"{datetime.date.today().isoformat()}.",
+        "Categories in fixed order. Under each, every HS-6 of its HS-4 headings is "
+        "listed; HS-6 belonging to another category or unused are struck through. "
+        "Red = excluded 7 Jul 2026 (removed from trade numbers); amber = uncertain "
+        f"(kept, flagged). Source: {EQUIPMENT_CATEGORIES_FILE.name} + hs6_reference.csv, "
+        f"generated {datetime.date.today().isoformat()}.",
         f_sub,
     )
     hr = 3
     for c, h in enumerate(headers):
         ws.write(hr, c, h, f_hdr)
-    for i, (ci, row) in enumerate(rows, start=hr + 1):
-        f_wrap, f_plain, f_red = cat_fmt[ci]
-        flagged = row[8] == "Yes"
+    for i, (ci, row, stt, struck, forced) in enumerate(rows, start=hr + 1):
         for c, v in enumerate(row):
-            if flagged and c in (8, 9):
+            if c == 0:
+                fmt = f_catA[ci]
+            elif stt == "Excluded":
+                fmt = f_excl_c if c in (5,) else (f_excl if c in (6, 8, 9) else f_plain)
+            elif stt == "Uncertain":
+                fmt = f_unc_c if c in (5,) else (f_unc if c in (6, 8, 9) else f_plain)
+            elif struck:
+                fmt = f_strk_c if c in (3, 5) else (f_grey if c in (8, 9) else f_strk)
+            elif c == 9 and forced:
                 fmt = f_red
             elif c in (1, 3, 5):
-                fmt = f_plain
+                fmt = f_ctr
             else:
-                fmt = f_wrap
+                fmt = f_plain
             ws.write(i, c, v, fmt)
-    for c, w in enumerate([34, 8, 38, 8, 44, 13, 44, 26, 9, 58]):
+    for c, w in enumerate([32, 7, 30, 9, 34, 12, 40, 14, 14, 34]):
         ws.set_column(c, c, w)
     ws.freeze_panes(hr + 1, 0)
     ws.autofilter(hr, 0, hr + len(rows), len(headers) - 1)
@@ -2271,13 +2401,15 @@ def _concordance_xlsx(
 def page_categorization():
     st.title("Equipment Categorization")
     st.markdown(
-        "Every HS code is assigned to one grid-equipment category, laid out as a "
-        "**HS-4 → HS-6 → HS-10** hierarchy. Most codes map at the HS-6 level (all "
-        "their HS-10 detail codes belong); a few — large transformers and HVDC "
-        "converters — are pinned to specific HS-10/HS-8 codes so the category "
-        "captures only the grid-relevant slice. "
-        "<span style='color:#c0392b;font-weight:600'>Forced or weak fits are "
-        "shown in red.</span>",
+        "Each grid-equipment category, laid out as a **HS-4 → HS-6 → HS-10** "
+        "hierarchy. Under every HS-4 heading we use, **all** its HS-6 codes are "
+        "shown — codes belonging to another category or not in the concordance are "
+        "<span style='text-decoration:line-through;color:#6b7280'>struck through</span>. "
+        "<span style='background:#fdecea;color:#c0392b;font-weight:600;padding:0 4px'>"
+        "Red = excluded 7 Jul 2026</span> (removed from all trade numbers); "
+        "<span style='background:#fff3cd;color:#8a6d00;font-weight:600;padding:0 4px'>"
+        "Amber = uncertain</span> (kept, but flagged); "
+        "<span style='color:#c0392b;font-weight:600'>forced/weak fits in red text</span>.",
         unsafe_allow_html=True,
     )
 
@@ -2294,37 +2426,81 @@ def page_categorization():
         set().union(*[c["hs6"] for c in cats])
         | {f[:6] for c in cats for f in c["full"]}
     )
-    n_carve = len({f for c in cats for f in c["full"]})
-    n_flag = sum(1 for e in entries for r in e["rows"] if r["flagged"])
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Categories", len(cats))
-    c2.metric("HS-6 codes", n_hs6)
-    c3.metric("HS-10/HS-8 carve-outs", n_carve)
-    c4.metric("Flagged", n_flag)
+    c2.metric("HS-6 codes in scope", n_hs6)
+    c3.metric("Excluded 7 Jul 2026", len(EXCLUDED_HS10))
+    c4.metric("Uncertain (flagged)", len(UNCERTAIN_HS10))
 
-    # Data for HS-10 detail children + descriptions (imports expose 10-digit).
-    df_all = load_data(
-        _data_file_signature(), _path_signature(EQUIPMENT_CATEGORIES_FILE)
+    # RAW data (apply_scope=False) so excluded / carve-out-dropped codes still
+    # appear here — flagged — even though they're gone from the trade numbers.
+    df_raw = load_data(
+        _data_file_signature(), _path_signature(EQUIPMENT_CATEGORIES_FILE),
+        apply_scope=False,
     )
-    imp = df_all[df_all["flow"] == "imports"] if "flow" in df_all.columns else df_all
-    hs6_to_detail: dict[str, list] = {}
-    ch = (
-        imp[["hs6", "hs_full", "hs_full_description"]]
-        .dropna(subset=["hs_full"])
-        .drop_duplicates("hs_full")
+    imp = df_raw[df_raw["flow"] == "imports"] if "flow" in df_raw.columns else df_raw
+    latest_yr = int(imp["year"].dropna().max()) if imp["year"].notna().any() else None
+    cur = imp[imp["year"] == latest_yr] if latest_yr else imp
+    v_latest = cur.groupby("hs_full")["value_cad"].sum().to_dict()
+    h10desc = (
+        imp.dropna(subset=["hs_full"]).groupby("hs_full")["hs_full_description"].first().to_dict()
     )
-    for r in ch.itertuples(index=False):
-        hs6_to_detail.setdefault(r.hs6, []).append(
-            (r.hs_full, r.hs_full_description or "")
+    hd = df_raw[["hs6", "hs_description"]].dropna(subset=["hs6"]).drop_duplicates("hs6")
+    hs6_desc_data = dict(zip(hd["hs6"], hd["hs_description"].fillna("")))
+    # HS-10s with latest-year imports, grouped by HS-6.
+    h10_by_h6: dict[str, list[str]] = {}
+    for hf in sorted(c for c in v_latest if v_latest[c] > 0):
+        h10_by_h6.setdefault(hf[:6], []).append(hf)
+
+    hs6ref = load_hs6_reference(_path_signature(HS6_REFERENCE_FILE))
+    whole_map, full_map, owner = _concordance_maps(cats)
+    # forced-fit flags from the parsed concordance (code -> reason)
+    flag_reason: dict[str, str] = {}
+    for e in entries:
+        for r in e["rows"]:
+            if r["flagged"] and r["reason"]:
+                flag_reason[r["code"]] = r["reason"]
+
+    def hs6_desc(h6: str) -> str:
+        return hs6_desc_data.get(h6) or hs6ref.get(h6[:4], {}).get(h6, "")
+
+    def show_h10(catname: str, h6: str) -> list[str]:
+        out = []
+        for hf in h10_by_h6.get(h6, []):
+            a = full_map.get(hf) or whole_map.get(h6)
+            if a == catname or (a is None and owner.get(h6) == catname):
+                out.append(hf)
+        return out
+
+    def belongs(catname: str, h6: str) -> bool:
+        return (
+            bool(show_h10(catname, h6))
+            or whole_map.get(h6) == catname
+            or (h6 in EXCLUDED_HS6 and owner.get(h6) == catname)
         )
-    for k in hs6_to_detail:
-        hs6_to_detail[k].sort()
-    hd = df_all[["hs6", "hs_description"]].dropna(subset=["hs6"]).drop_duplicates("hs6")
-    hs6_desc = dict(zip(hd["hs6"], hd["hs_description"].fillna("")))
-    _, hs4_desc = load_hs_priority(HS4_PRIORITY_FILE)
 
+    def code_status(hf: str, h6: str) -> str:
+        if h6 in EXCLUDED_HS6:
+            return "notused-sub"
+        if hf in EXCLUDED_HS10:
+            return "excluded"
+        if hf in UNCERTAIN_HS10:
+            return "uncertain"
+        if full_map.get(hf) or whole_map.get(h6):
+            return "in"
+        return "notused-carve"
+
+    yr_lbl = latest_yr or ""
+    _, hs4_desc_pri = load_hs_priority(HS4_PRIORITY_FILE)
+    hs4_desc = {**hs4_desc_pri, **HS4_HEADINGS}
+
+    _concordance_ctx = {
+        "whole": whole_map, "full": full_map, "owner": owner, "ref": hs6ref,
+        "h10_by_h6": h10_by_h6, "v_latest": v_latest, "h10desc": h10desc,
+        "hs6_desc": hs6_desc_data, "yr": yr_lbl, "flag": flag_reason,
+    }
     _excel_download(
-        _concordance_xlsx(entries, hs4_desc, hs6_desc),
+        _concordance_xlsx(entries, hs4_desc, _concordance_ctx),
         "equipment_categories_concordance.xlsx",
         "Download concordance (Excel)",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2335,85 +2511,119 @@ def page_categorization():
     st.divider()
 
     RED, DARK, MUTED, BLUE = "#c0392b", "#1f2937", "#6b7280", "#1f3a68"
+    REDBG, AMBERBG, STRIKE = "#fdecea", "#fff3cd", "#6b7280"
     esc = html.escape
 
+    def _money(hf: str) -> str:
+        v = v_latest.get(hf, 0)
+        return f"${v/1e6:,.1f}M" if v else ""
+
     for e in entries:
-        if pick != "All categories" and e["name"] != pick:
+        name = e["name"]
+        if pick != "All categories" and name != pick:
             continue
-        st.header(e["name"])
+        st.header(name)
         intro = " ".join(e["intro"]).strip()
         if intro:
             st.caption(intro)
 
-        # Group rows into HS-4 → HS-6 → {whole assignment, carve-out details}.
-        tree: dict[str, dict[str, dict]] = {}
-        for r in e["rows"]:
-            code = r["code"]
-            node = tree.setdefault(code[:4], {}).setdefault(
-                code[:6], {"whole": None, "carve": []}
-            )
-            if len(code) == 6:
-                node["whole"] = r
-            else:
-                node["carve"].append(r)
-
+        # HS-4 headings this category touches.
+        hs4s = sorted(
+            h4 for h4 in hs6ref if any(belongs(name, h6) for h6 in hs6ref[h4])
+        )
         rows = [
             "<tr style='border-bottom:2px solid #d0d0d0;text-align:left'>"
             "<th style='padding:6px 10px'>HS code</th>"
             "<th style='padding:6px 10px'>Description</th>"
-            "<th style='padding:6px 10px'>Notes</th></tr>"
+            f"<th style='padding:6px 10px;text-align:right'>{yr_lbl} imports</th>"
+            "<th style='padding:6px 10px'>Status / notes</th></tr>"
         ]
-        for hs4 in sorted(tree):
+        for hs4 in hs4s:
             h4d = hs4_desc.get(hs4, "")
             rows.append(
                 "<tr style='background:#eef2f7'>"
-                f"<td colspan='3' style='padding:7px 10px;font-weight:700;"
+                f"<td colspan='4' style='padding:7px 10px;font-weight:700;"
                 f"color:{BLUE}'>HS-4 · {hs4}"
                 + (f" — {esc(h4d)}" if h4d else "")
                 + "</td></tr>"
             )
-            for hs6 in sorted(tree[hs4]):
-                node = tree[hs4][hs6]
-                whole, carve = node["whole"], node["carve"]
-                if whole:
-                    d = whole["desc"] or hs6_desc.get(hs6, "")
-                    flagged, reason = whole["flagged"], whole["reason"]
-                else:
-                    d = hs6_desc.get(hs6, "")
-                    flagged, reason = False, ""
+            for hs6 in sorted(hs6ref[hs4]):
+                d6 = hs6_desc(hs6)
+                if not belongs(name, hs6):
+                    # Sibling HS-6 not in this category — struck, cross-referenced.
+                    if hs6 in EXCLUDED_HS6:
+                        ref = "Excluded — sub-scale transformer (≤16 kVA)"
+                    elif owner.get(hs6):
+                        ref = f"Used in: {esc(owner[hs6])}"
+                    else:
+                        ref = "Not in concordance"
+                    rows.append(
+                        "<tr style='border-bottom:1px solid #f0f0f0'>"
+                        f"<td style='padding:5px 10px 5px 24px;color:{STRIKE};"
+                        f"text-decoration:line-through;white-space:nowrap'>{hs6}</td>"
+                        f"<td style='padding:5px 10px;color:{STRIKE};"
+                        f"text-decoration:line-through'>{esc(d6)}</td>"
+                        "<td></td>"
+                        f"<td style='padding:5px 10px;color:{MUTED};font-style:italic'>"
+                        f"{ref}</td></tr>"
+                    )
+                    continue
+                # In-scope HS-6 header.
+                whole = whole_map.get(hs6) == name
                 note6 = "" if whole else (
-                    " <span style='color:#888;font-style:italic'>· selected "
-                    "detail codes only</span>"
+                    "<span style='color:#888;font-style:italic'>selected detail "
+                    "codes only</span>"
                 )
-                notes6 = (
-                    f"<span style='color:{RED};font-style:italic'>{esc(reason)}</span>"
-                    if flagged and reason else ""
-                )
+                if hs6 in flag_reason:
+                    note6 = (
+                        f"<span style='color:{RED};font-style:italic'>"
+                        f"{esc(flag_reason[hs6])}</span>"
+                    )
                 rows.append(
                     "<tr style='border-bottom:1px solid #eee'>"
                     f"<td style='padding:5px 10px 5px 24px;font-weight:600;"
                     f"color:{DARK};white-space:nowrap'>{hs6}</td>"
-                    f"<td style='padding:5px 10px;color:{DARK}'>{esc(d)}{note6}</td>"
-                    f"<td style='padding:5px 10px'>{notes6}</td></tr>"
+                    f"<td style='padding:5px 10px;color:{DARK}'>{esc(d6)}</td>"
+                    "<td></td>"
+                    f"<td style='padding:5px 10px'>{note6}</td></tr>"
                 )
-                # Detail level: carve-out rows when pinned, else all HS-10 kids.
-                if carve:
-                    detail = [(r["code"], r["desc"] or "", r) for r in carve]
-                else:
-                    detail = [(c, dd, None) for c, dd in hs6_to_detail.get(hs6, [])]
-                for code, dd, r in detail:
-                    cflag = bool(r and r["flagged"])
-                    cnotes = (
-                        f"<span style='color:{RED};font-style:italic'>"
-                        f"{esc(r['reason'])}</span>"
-                        if cflag and r and r["reason"] else ""
-                    )
+                # HS-10 detail, biggest first.
+                for hf in sorted(show_h10(name, hs6), key=lambda x: -v_latest.get(x, 0)):
+                    stt = code_status(hf, hs6)
+                    dd = h10desc.get(hf, "")
+                    bg, txt, deco, statushtml = "", MUTED, "", ""
+                    if stt == "excluded":
+                        bg = f"background:{REDBG};"
+                        statushtml = (
+                            f"<span style='color:{RED};font-weight:700'>"
+                            "Excluded — 7 Jul 2026</span>"
+                        )
+                    elif stt == "uncertain":
+                        bg = f"background:{AMBERBG};"
+                        statushtml = (
+                            "<span style='color:#8a6d00;font-weight:700'>Uncertain"
+                            "</span> <span style='color:#8a6d00;font-style:italic'>"
+                            "— flagged 7 Jul 2026</span>"
+                        )
+                    elif stt.startswith("notused"):
+                        txt = STRIKE; deco = "text-decoration:line-through;"
+                        statushtml = (
+                            "<span style='color:#888;font-style:italic'>out of scope"
+                            "</span>"
+                        )
+                    elif hf in flag_reason:
+                        statushtml = (
+                            f"<span style='color:{RED};font-style:italic'>"
+                            f"{esc(flag_reason[hf])}</span>"
+                        )
                     rows.append(
-                        "<tr style='border-bottom:1px solid #f4f4f4'>"
-                        f"<td style='padding:4px 10px 4px 48px;color:{MUTED};"
-                        f"white-space:nowrap'>{code}</td>"
-                        f"<td style='padding:4px 10px;color:{MUTED}'>{esc(dd)}</td>"
-                        f"<td style='padding:4px 10px'>{cnotes}</td></tr>"
+                        f"<tr style='border-bottom:1px solid #f4f4f4;{bg}'>"
+                        f"<td style='padding:4px 10px 4px 48px;color:{txt};{deco}"
+                        f"white-space:nowrap'>{hf}</td>"
+                        f"<td style='padding:4px 10px;color:{txt};{deco}'>{esc(dd)}</td>"
+                        f"<td style='padding:4px 10px;text-align:right;color:{txt};"
+                        f"white-space:nowrap'>{_money(hf)}</td>"
+                        f"<td style='padding:4px 10px'>{statushtml}</td></tr>"
                     )
         st.markdown(
             "<table style='width:100%;border-collapse:collapse;font-size:13px'>"

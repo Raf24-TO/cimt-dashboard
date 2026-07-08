@@ -1,0 +1,90 @@
+hs4,hs6,description
+7225,722511,Grain-oriented
+7225,722519,Other
+7225,722530,"Other, not further worked than hot-rolled, in coils"
+7225,722540,"Other, not further worked than hot-rolled, not in coils"
+7225,722550,"Other, not further worked than cold-rolled (cold-reduced)"
+7225,722591,Electrolytically plated or coated with zinc
+7225,722592,Otherwise plated or coated with zinc
+7225,722599,Other
+7226,722611,Grain-oriented
+7226,722619,Other
+7226,722620,Of high-speed steel
+7226,722691,Not further worked than hot-rolled
+7226,722692,Not further worked than cold-rolled (cold-reduced)
+7226,722699,Other
+7308,730810,Bridges and bridge sections
+7308,730820,Towers and lattice masts
+7308,730830,"Doors, windows and their frames and thresholds for doors"
+7308,730840,"Equipment for scaffolding, shuttering, propping or pit- propping"
+7308,730890,Other
+7407,740710,Of refined copper
+7407,740721,Of copper-zinc base alloys (brass)
+7407,740729,Other
+7408,740811,Of which the maximum cross-sectional dimension exceeds 6 mm
+7408,740819,Other
+7408,740821,Of copper-zinc base alloys (brass)
+7408,740822,Of copper-nickel base alloys (cupro-nickel) or copper-nickel-zinc base alloys (nickel silver)
+7408,740829,Other
+7413,741300,"Stranded wire, cables, plaited bands and the like, including slings and similar articles, of copper, not electrically insulated"
+7604,760410,"Of aluminum, not alloyed"
+7604,760421,Hollow profiles
+7604,760429,Other
+7605,760511,Of which the maximum cross-sectional dimension exceeds <il>7 mm</il>
+7605,760519,Other
+7605,760521,Of which the maximum cross-sectional dimension exceeds <il>7 mm</il>
+7605,760529,Other
+7614,761410,With steel core
+7614,761490,Other
+8504,850410,Ballasts for discharge lamps or tubes
+8504,850421,Having a power handling capacity not exceeding <il>650 kVA</il>
+8504,850422,"Having a power handling capacity exceeding <il>650 kVA</il> but not exceeding <il>10,000 kVA</il>"
+8504,850423,"Having a power handling capacity exceeding <il>10,000 kVA</il>"
+8504,850431,Having a power handling capacity not exceeding <il>1 kVA</il>
+8504,850432,Having a power handling capacity exceeding <il>1 kVA</il> but not exceeding <il>16 kVA</il>
+8504,850433,Having a power handling capacity exceeding <il>16 kVA</il> but not exceeding <il>500 kVA</il>
+8504,850434,Having a power handling capacity exceeding <il>500 kVA</il>
+8504,850440,Static converters
+8504,850450,Other inductors
+8504,850490,Parts
+8532,853210,Fixed capacitors designed for use in <il>50/60 Hz</il> circuits and having a reactive power handling capacity of not less than <il>0.5 kvar (power capacitors)</il>
+8532,853221,Tantalum
+8532,853222,Aluminum electrolytic
+8532,853223,"Ceramic dielectric, single layer"
+8532,853224,"Ceramic dielectric, multilayer"
+8532,853225,Dielectric of paper or plastics
+8532,853229,Other
+8532,853230,Variable or adjustable (pre-set) capacitors
+8532,853290,Parts
+8535,853510,Fuses
+8535,853521,For a voltage of less than <il>72.5 kV</il>
+8535,853529,Other
+8535,853530,Isolating switches and make-and-break switches
+8535,853540,"Lightning arresters, voltage limiters and surge suppressors"
+8535,853590,Other
+8536,853610,Fuses
+8536,853620,Automatic circuit breakers
+8536,853630,Other apparatus for protecting electrical circuits
+8536,853641,For a voltage not exceeding 60 V
+8536,853649,Other
+8536,853650,Other switches
+8536,853661,Lamp-holders
+8536,853669,Other
+8536,853670,"Connectors for optical fibers, optical fiber bundles or cables"
+8536,853690,Other apparatus
+8537,853710,"For a voltage not exceeding <il>1,000 V</il>"
+8537,853720,"For a voltage exceeding <il>1,000 V</il>"
+8544,854411,Of copper
+8544,854419,Other
+8544,854420,Coaxial cable and other coaxial electric conductors
+8544,854430,"Ignition wiring sets and other wiring sets of a kind used in vehicles, aircraft or ships"
+8544,854442,Fitted with connectors
+8544,854449,Other
+8544,854460,"Other electric conductors, for a voltage exceeding <il>1,000 V</il>"
+8544,854470,Optical fiber cables
+8546,854610,Of glass
+8546,854620,Of ceramics
+8546,854690,Other
+8547,854710,Insulating fittings of ceramics
+8547,854720,Insulating fittings of plastics
+8547,854790,Other
