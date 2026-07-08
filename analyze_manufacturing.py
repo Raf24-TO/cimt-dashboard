@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent
 PARQUET = ROOT / "16100047_manufacturing_sales.parquet"
 OUT = ROOT / "manufacturing_charts"
 OUT.mkdir(exist_ok=True)
+STATS_DIR = ROOT / "statistics"  # U.S. Census M3 series (NAICS 3353)
 
 NAICS_COL = "North American Industry Classification System (NAICS)"
 STAT_COL = "Principal statistics"
@@ -244,6 +245,32 @@ def chart_ratio_335(df):
     save(fig, "07b_unfilled_to_sales_335.png")
 
 
+# -------- 8. U.S. counterpart of the 3353 ratio (Census M3 series)
+def chart_ratio_3353_usa():
+    """Same logic as chart_ratio_3353, computed from the two U.S. Census M3
+    CSVs in statistics/: shipments (U35CVS) and unfilled orders (U35CUO),
+    NAICS 3353. Both series are not seasonally adjusted (M3 'U' prefix)."""
+    label, color = "Electrical equipment manufacturing", "#6a4c93"
+    sales = pd.read_csv(STATS_DIR / "U35CVS.csv", parse_dates=["observation_date"]) \
+        .set_index("observation_date")["U35CVS"]
+    unf = pd.read_csv(STATS_DIR / "U35CUO.csv", parse_dates=["observation_date"]) \
+        .set_index("observation_date")["U35CUO"]
+    ratio = (unf / sales).sort_index()  # units cancel (both millions USD)
+    roll = ratio.rolling(6, min_periods=4).mean()
+    fig, ax = plt.subplots(figsize=(13, 6.5))
+    ax.plot(ratio.index, ratio.values, color=color, lw=1.0, alpha=0.35, label="Monthly")
+    ax.plot(roll.index, roll.values, color=color, lw=2.8, label="6-mo avg")
+    valid = ratio.dropna()
+    ax.axhline(valid.mean(), ls="--", lw=1.1, color="#888", label=f"mean = {valid.mean():.1f}")
+    ax.set_title(f"Unfilled orders ÷ sales — {label} [3353] — USA", fontweight="bold")
+    ax.set_ylabel("Ratio")
+    ax.set_ylim(bottom=0)
+    ax.legend(frameon=False, fontsize=12, loc="upper left")
+    adj_note(fig, "U.S. Census M3, NAICS 3353. Both statistics (unfilled orders & sales): "
+                  "Unadjusted — not seasonally adjusted.")
+    save(fig, "08_unfilled_to_sales_3353_usa.png")
+
+
 def main():
     df = load()
     chart_sales_trends(df)
@@ -254,6 +281,7 @@ def main():
     chart_unfilled_to_sales(df)
     chart_ratio_3353(df)
     chart_ratio_335(df)
+    chart_ratio_3353_usa()
     print(f"\nAll charts written to {OUT}")
 
 
