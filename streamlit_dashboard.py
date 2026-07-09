@@ -144,8 +144,8 @@ CANADA_ROLE = {
 }
 
 # Statistics Canada IPPI — NAPCS P73 (Electrical, electronic, audiovisual and
-# telecommunication products), Canada, annual averages. Index base 2020 = 100.
-# See Price Adjustments.md for sourcing and methodology.
+# telecommunication products), Canada, annual averages, base 2020 = 100. Kept as
+# the aggregate fallback; per-category series are loaded from IPPI_FILE below.
 IPPI_P73: dict[int, float] = {
     2016:  99.98,
     2017:  99.25,
@@ -162,22 +162,140 @@ IPPI_BASE_YEAR = 2025
 NOMINAL_BASIS = "Nominal CAD"
 REAL_BASIS = "2025 CAD"
 
+# ---- Category-specific IPPI deflation --------------------------------------
+# Per-product IPPI series (StatCan table 18-10-0266, NAPCS, base 2020-01 = 100)
+# in Statistics/IPPI_Statscan.csv. Each grid component is deflated to constant
+# 2025 CAD by the IPPI for its OWN product class rather than the single
+# electrical aggregate (P73) — prices diverged widely over 2016–2025 (wire &
+# cable +89%, copper +116%, wiring devices +38%, vs P73 +42%). See the IPPI page.
+IPPI_FILE = ROOT / "Statistics" / "IPPI_Statscan.csv"
+IPPI_FALLBACK = "P73"
+# Equipment category (name in equipment_categories.md) → NAPCS series code.
+IPPI_BY_CATEGORY: dict[str, str] = {
+    "Large Power Transformer (≥100 MVA)": "381221",
+    "Medium / Substation Transformer": "381221",
+    "High-Voltage Switchgear": "38123",
+    "Medium-Voltage Switchgear": "38123",
+    "Protection & Control panels": "38123",
+    "Disconnect Switches (HV/MV)": "38123",
+    "Underground / Submarine Cable": "38121",
+    "Static power converters (incl. HVDC)": "38125",
+    "Substation reactive-power equipment (shunt reactors, capacitor banks, SVC/STATCOM)": "38125",
+}
+# HS-6 overrides (win over category): overhead conductor priced by its metal,
+# and the raw-material feedstock codes, which track metal/mineral not equipment.
+IPPI_BY_HS6: dict[str, str] = {
+    # Overhead conductor: bare copper / aluminium conductor + steel towers
+    "741300": "322", "761410": "32711", "761490": "32711", "730820": "31212",
+    # Copper feedstock + winding wire
+    "740710": "322", "740811": "322", "740819": "322", "740821": "322", "740829": "322",
+    "854411": "322", "854419": "322",
+    # Aluminium feedstock
+    "760410": "32711", "760421": "32711", "760429": "32711",
+    "760511": "32711", "760519": "32711", "760521": "32711", "760529": "32711",
+    # Grain-oriented / silicon-electrical steel
+    "722511": "31212", "722519": "31212", "722611": "31212", "722619": "31212",
+    # Insulators + insulating fittings (ceramic / glass / mineral)
+    "854610": "29111", "854620": "29111", "854690": "29111",
+    "854710": "29111", "854720": "29111", "854790": "29111",
+    # Transformer / converter parts
+    "850490": "38122",
+}
+# IPPI page display: (component label, HS scope, NAPCS code).
+IPPI_PAGE_ROWS: list[tuple[str, str, str]] = [
+    ("Large power transformer (>100 MVA)", "8504.23", "381221"),
+    ("Medium / substation transformer", "8504.21 / .22 / .33 / .34", "381221"),
+    ("HV switchgear", "8535", "38123"),
+    ("MV switchgear (incl. LV to meter)", "8535 / 8536", "38123"),
+    ("Protection & control panels", "8537", "38123"),
+    ("Disconnect switches", "8535.30", "38123"),
+    ("Underground / submarine cable", "8544.60 / .49", "38121"),
+    ("Static power converters (incl. HVDC)", "8504.40", "38125"),
+    ("Reactive-power equipment", "8532", "38125"),
+    ("Overhead conductor — copper", "7413", "322"),
+    ("Overhead conductor — aluminium (ACSR)", "7614", "32711"),
+    ("Overhead conductor — steel towers", "7308.20", "31212"),
+    ("Copper feedstock", "7407 / 7408", "322"),
+    ("Copper winding wire", "8544.11 / .19", "322"),
+    ("Grain-oriented electrical steel", "7225 / 7226", "31212"),
+    ("Insulators (ceramic / glass)", "8546", "29111"),
+    ("Aluminium feedstock", "7604 / 7605", "32711"),
+]
+
 
 def deflation_factors() -> dict[int, float]:
+    """Legacy single-series (P73) factors — fallback when IPPI_FILE is absent."""
     base = IPPI_P73[IPPI_BASE_YEAR]
     return {y: base / v for y, v in IPPI_P73.items()}
 
 
-def apply_deflation(frame: pd.DataFrame, basis: str) -> pd.DataFrame:
-    """Scale ``value_cad`` to base-year dollars when ``basis == REAL_BASIS``.
+@st.cache_data(show_spinner=False)
+def load_ippi(sig: tuple | None = None) -> dict[str, dict]:
+    """Per-NAPCS IPPI series from IPPI_FILE.
 
-    Years outside the IPPI coverage table are left at nominal value.
-    Returns a new frame; the caller's frame is not mutated.
-    """
-    if basis != REAL_BASIS:
+    Returns ``{napcs_code: {"name": str, "annual": {year: index}}}`` (annual
+    average of the monthly index). ``sig`` only busts the cache on file change."""
+    if not IPPI_FILE.exists():
+        return {}
+    df = pd.read_csv(IPPI_FILE)
+    col = "North American Product Classification System (NAPCS)"
+    df = df.dropna(subset=["VALUE"]).copy()
+    df["year"] = df["REF_DATE"].astype(str).str[:4].astype(int)
+    df["napcs"] = df[col].str.extract(r"\[([^\]]+)\]\s*$")[0]
+    df["name"] = df[col].str.replace(r"\s*\[[^\]]+\]\s*$", "", regex=True)
+    out: dict[str, dict] = {}
+    for code, sub in df.groupby("napcs"):
+        out[code] = {
+            "name": sub["name"].iloc[0],
+            "annual": sub.groupby("year")["VALUE"].mean().to_dict(),
+        }
+    return out
+
+
+@st.cache_data
+def hs6_to_napcs(cat_sig: tuple | None = None) -> dict[str, str]:
+    """Map every concordance HS-6 to the NAPCS IPPI series used to deflate it
+    (HS-6 override, else the code's equipment category, else the P73 aggregate)."""
+    cats = load_equipment_categories(
+        EQUIPMENT_CATEGORIES_FILE, _path_signature(EQUIPMENT_CATEGORIES_FILE)
+    )
+    whole_map, full_map, owner = _concordance_maps(cats)
+    m: dict[str, str] = {}
+    for h6 in set(whole_map) | {f[:6] for f in full_map}:
+        if h6 in IPPI_BY_HS6:
+            m[h6] = IPPI_BY_HS6[h6]
+        else:
+            cat = whole_map.get(h6) or owner.get(h6)
+            m[h6] = IPPI_BY_CATEGORY.get(cat, IPPI_FALLBACK)
+    m.update(IPPI_BY_HS6)  # ensure overrides present even if not in concordance
+    return m
+
+
+def apply_deflation(frame: pd.DataFrame, basis: str) -> pd.DataFrame:
+    """Scale ``value_cad`` to constant 2025 CAD using the **category-specific**
+    IPPI — each HS-6 is deflated by its own NAPCS series. Years outside IPPI
+    coverage stay nominal. Falls back to the P73 aggregate if IPPI_FILE is
+    missing. Returns a new frame; the caller's is not mutated."""
+    if basis != REAL_BASIS or frame.empty or "year" not in frame.columns:
         return frame
-    factor = frame["year"].map(deflation_factors()).fillna(1.0).astype(float)
-    return frame.assign(value_cad=frame["value_cad"] * factor)
+    ippi = load_ippi(_path_signature(IPPI_FILE))
+    if not ippi or "hs6" not in frame.columns:
+        factor = frame["year"].map(deflation_factors()).fillna(1.0).astype(float)
+        return frame.assign(value_cad=frame["value_cad"] * factor)
+    base = IPPI_BASE_YEAR
+    facs: dict[str, dict] = {}
+    for code, d in ippi.items():
+        b = d["annual"].get(base)
+        if b:
+            facs[code] = {y: b / v for y, v in d["annual"].items() if v}
+    fb = facs.get(IPPI_FALLBACK, {})
+    codemap = hs6_to_napcs(_path_signature(EQUIPMENT_CATEGORIES_FILE))
+    napcs = frame["hs6"].map(codemap).fillna(IPPI_FALLBACK)
+    factor = [
+        (1.0 if pd.isna(y) else facs.get(c, fb).get(int(y), fb.get(int(y), 1.0)))
+        for c, y in zip(napcs, frame["year"])
+    ]
+    return frame.assign(value_cad=frame["value_cad"] * pd.Series(factor, index=frame.index))
 
 
 def _data_file_signature() -> tuple[str, float, int]:
@@ -934,8 +1052,10 @@ def page_dashboard():
                 },
             )
             st.caption(
-                "StatCan IPPI · NAPCS P73 (Electrical, electronic, audiovisual "
-                "and telecommunication products), Canada, annual avg, 2020 = 100."
+                "Deflation is now **category-specific** — each component uses the "
+                "IPPI for its own product class (see the **IPPI deflators** page). "
+                "Below is the electrical aggregate (NAPCS P73), shown for reference "
+                "only. StatCan IPPI, table 18-10-0266, Canada, annual avg, 2020 = 100."
             )
 
     if not sel_years or not sel_hs:
@@ -2761,6 +2881,92 @@ def page_major_importers():
     st.dataframe(disp, hide_index=True, use_container_width=True, height=560)
 
 
+def page_ippi():
+    st.title("IPPI deflators")
+    st.markdown(
+        "Nominal import values are converted to **constant 2025 CAD** using "
+        "Statistics Canada's **Industrial Product Price Index** (IPPI) — the "
+        "factory-gate price index for manufactured goods (table 18-10-0266, "
+        "NAPCS, base 2020-01 = 100). Each grid component is deflated by the IPPI "
+        "for **its own product class**, not a single electrical aggregate, because "
+        "prices diverged sharply over the decade. This page lists exactly which "
+        "series is applied to each component and how much it moved."
+    )
+    ippi = load_ippi(_path_signature(IPPI_FILE))
+    if not ippi:
+        st.error(f"IPPI file not found: {IPPI_FILE.relative_to(ROOT)}")
+        st.stop()
+
+    rows = []
+    for label, hs, code in IPPI_PAGE_ROWS:
+        d = ippi.get(code)
+        if not d:
+            continue
+        i16 = d["annual"].get(2016)
+        i25 = d["annual"].get(2025)
+        rows.append(
+            {
+                "Component": label,
+                "HS scope": hs,
+                "IPPI series applied": d["name"],
+                "NAPCS": code,
+                "2016 index": i16,
+                "2025 index": i25,
+                "2016→2025 change": (i25 / i16 - 1) if i16 else None,
+                "Deflator (→2025 CAD)": (i25 / i16) if i16 else None,
+            }
+        )
+    tbl = pd.DataFrame(rows)
+
+    changes = [r["2016→2025 change"] for r in rows if r["2016→2025 change"] is not None]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Components mapped", len(rows))
+    c2.metric("Distinct IPPI series", tbl["NAPCS"].nunique())
+    c3.metric(
+        "Price-change range (2016→25)",
+        f"{min(changes)*100:.0f}% – {max(changes)*100:.0f}%",
+    )
+
+    st.dataframe(
+        tbl,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "2016 index": st.column_config.NumberColumn(format="%.1f", width="small"),
+            "2025 index": st.column_config.NumberColumn(format="%.1f", width="small"),
+            "2016→2025 change": st.column_config.NumberColumn(format="percent", width="small"),
+            "Deflator (→2025 CAD)": st.column_config.NumberColumn(format="%.3f", width="small"),
+            "NAPCS": st.column_config.TextColumn(width="small"),
+        },
+    )
+    st.caption(
+        "Deflator = 2025 index ÷ 2016 index (a nominal-2016 value is multiplied by "
+        "the deflator to express it in 2025 CAD). Overhead conductor is split by "
+        "material (copper / aluminium / steel towers); copper winding wire follows "
+        "the copper metal price. Source: StatCan IPPI, table 18-10-0266, base "
+        "2020-01 = 100."
+    )
+
+    st.divider()
+    st.subheader("Index trajectories, 2016–2025")
+    codes = list(dict.fromkeys([c for _, _, c in IPPI_PAGE_ROWS] + [IPPI_FALLBACK]))
+    years = list(range(2016, 2026))
+    wide = pd.DataFrame({"Year": years})
+    for code in codes:
+        d = ippi.get(code)
+        if not d:
+            continue
+        label = f"{d['name']} [{code}]"
+        wide[label] = [d["annual"].get(y) for y in years]
+    wide = wide.set_index("Year")
+    st.line_chart(wide, height=420)
+    st.caption(
+        "All series rebased to 2020-01 = 100. The flat electrical aggregate "
+        "(P73, +42%) sits well below the grid-equipment and metal series — which "
+        "is why deflating everything by P73 understated the true price inflation."
+    )
+
+
 def run():
     """Multipage entry point: page config + shared CSS, then navigation."""
     st.set_page_config(
@@ -2777,6 +2983,7 @@ def run():
                 icon="🗂️",
             ),
             st.Page(page_major_importers, title="Major importers", icon="🏭"),
+            st.Page(page_ippi, title="IPPI deflators", icon="📈"),
         ]
     )
     nav.run()
