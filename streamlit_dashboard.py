@@ -113,6 +113,14 @@ HS4_HEADINGS: dict[str, str] = {
     "8546": "Electrical insulators",
     "8547": "Insulating fittings for electrical machines/appliances; conduit",
 }
+
+# StatCan's CIMT source carries a stale (pre-2007 HS) heading for 854449 — it
+# reads "≤ 80 V" but the current subheading 8544.49 is "≤ 1,000 V, not fitted
+# with connectors" (its HS-10 children span ≤600 V and 600–1,000 V). Correct the
+# HS-6 description on load so the categorization page and the filters show it right.
+HS6_DESC_FIX: dict[str, str] = {
+    "854449": "Insulated conductors, ≤ 1,000 V, not fitted with connectors",
+}
 LOGO_PATH = ROOT / "assets" / "transition_accelerator.png"
 CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 
@@ -351,6 +359,11 @@ def load_data(
         df["quantity_1"] = pd.to_numeric(df["quantity_1"], errors="coerce").fillna(0)
     if "unit_1" not in df.columns:
         df["unit_1"] = pd.NA
+    # Correct stale source HS-6 descriptions (e.g. 854449 "≤80 V" → "≤1,000 V")
+    # — applied regardless of scope so all displays and filters read correctly.
+    if "hs6" in df.columns and "hs_description" in df.columns:
+        for _h6, _desc in HS6_DESC_FIX.items():
+            df.loc[df["hs6"] == _h6, "hs_description"] = _desc
     if not apply_scope:
         return df
     if "hs6" in df.columns:
