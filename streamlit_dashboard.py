@@ -36,59 +36,29 @@ CATEGORIZATION_FILE = ROOT / "categorization.md"
 EQUIPMENT_CATEGORIES_FILE = ROOT / "equipment_categories.md"
 MAJOR_IMPORTERS_PARQUET = ROOT / "cimt_output" / "major_importers.parquet"
 
-# HS-6 codes intentionally excluded from the dashboard. 850431 (≤1 kVA) and
-# 850432 (>1 ≤16 kVA) are sub-grid-scale — electronic / equipment-internal /
-# small dry-type & control transformers — not grid hardware. The 9030xx codes
-# are HS-4 9030 electrical-measuring instruments (multimeters, oscilloscopes,
-# spectrum analyzers, lab/test gear) — predominantly non-grid and indistinguishable
-# from grid metering in the HS, so dropped entirely. Filtered out at data-load so
-# the existing parquets don't have to be regenerated.
-EXCLUDED_HS6: set[str] = {
-    "850431", "850432",
-    "903031", "903032", "903033", "903039", "903084", "903089",
-}
+# ---------------------------------------------------------------------------
+# concordance.csv — THE SINGLE SOURCE OF TRUTH. Scope (keep / exclude /
+# uncertain), category assignment, HS-6 descriptions and IPPI deflators are all
+# derived from it; the formatted HS_master_concordance.xlsx is generated from
+# it. Edit the CSV, not the sets below — they are computed from it at load.
+# ---------------------------------------------------------------------------
+CONCORDANCE_FILE = ROOT / "concordance.csv"
+_CONC = pd.read_csv(CONCORDANCE_FILE, dtype=str).fillna("")
 
-# HS-10 detail codes excluded on 7 July 2026 after the code-level scope audit
-# (see HS10_scope_exclusions.xlsx). These fall outside the "generator terminal →
-# customer meter" grid boundary — behind-the-meter building/industrial/machinery
-# apparatus, generation-side inverters, consumer/IT power supplies, data/coax
-# cable and wiring accessories — swept in by broad HS-6 codes. Dropped from every
-# trade number at data load; still shown (flagged) on the Equipment Categorization
-# page for transparency.
-EXCLUDED_HS10: set[str] = {
-    "8535903000",
-    "8536509090", "8536900090", "8536309090", "8536900020", "8536900010",
-    "8536509019", "8536509011", "8536509030", "8536501000", "8536509050",
-    "8536509060", "8536509040", "8536509020", "8536309010", "8536302000", "8536301000",
-    "8544420090", "8544200000", "8544420010",
-    "8504409099", "8504409032", "8504409035",
-    "8504500000", "8532290000", "8532300000", "8532900000",
-    "8537109920", "8537103999", "8537103992", "8537109100", "8537103991",
-    "8537101990", "8537102910", "8536490030", "8537101910", "8536410099",
-    "8537102100", "8537102990", "8536490040", "8537101100", "8536410091",
-    "8536410092", "8536490010", "8536410019", "8537103910", "8537103100",
-    "8536410011", "8537109930", "8536410020", "8536490020",
-}
-# HS-10 codes flagged 7 July 2026 as uncertain — plausibly grid LV-distribution
-# up to the meter but dominated by non-grid use and impossible to isolate. Kept in
-# the trade numbers; highlighted amber with an "uncertain" note in the concordance.
-UNCERTAIN_HS10: set[str] = {
-    "8544490019", "8544490090",
-    "8504409031", "8504409039", "8504409034", "8504409033",
-    "8537109990", "8537109300", "8536490090",
-}
-
-# HS-6 headings that are wholly non-grid (every one of their in-scope HS-10 codes
-# is in EXCLUDED_HS10): other LV switches, connection apparatus, LV protective
-# apparatus n.e.s., electric inductors, LV relays ≤60 V, connectorized cordsets,
-# and coaxial cable. Dropped WHOLESALE at HS-6 (not just the current HS-10 codes)
-# so historical code-variants of the same products are removed too — otherwise
-# earlier years keep old variants and the year-over-year trend is distorted.
-# Kept separate from EXCLUDED_HS6 (which carries a "sub-scale transformer"
-# meaning used by the concordance page).
-EXCLUDED_HS6_NONGRID: set[str] = {
-    "853650", "853690", "853630", "850450", "853641", "854442", "854420",
-}
+# HS-6 headings dropped WHOLESALE (hs6_rule=drop): sub-scale transformers
+# (850431/850432 ≤16 kVA), HS-4 9030 measuring instruments, and wholly-non-grid
+# switch/relay/connector/coax headings. Removed at HS-6 so historical
+# code-variants go too, keeping multi-year trends consistent.
+DROP_HS6: set[str] = set(_CONC.loc[_CONC["hs6_rule"] == "drop", "hs6"])
+# HS-10 detail codes from the 7-July-2026 code-level scope audit: status=exclude
+# is dropped from every trade number (behind-the-meter / generation-side /
+# consumer apparatus swept in by broad HS-6); status=uncertain is kept and
+# flagged amber (plausibly grid LV-to-meter but dominated by non-grid use).
+EXCLUDED_HS10: set[str] = set(_CONC.loc[_CONC["status"] == "exclude", "hs_full"])
+UNCERTAIN_HS10: set[str] = set(_CONC.loc[_CONC["status"] == "uncertain", "hs_full"])
+# Sub-scale transformer headings — used only for the "sub-scale" label on the
+# Equipment Categorization page (already in DROP_HS6 for scope purposes).
+SUBSCALE_HS6: set[str] = {"850431", "850432"}
 
 # Complete HS-6 nomenclature under every HS-4 heading we use (89 codes), so the
 # concordance can show sibling HS-6 codes we don't use (struck through). HS-4
@@ -114,13 +84,11 @@ HS4_HEADINGS: dict[str, str] = {
     "8547": "Insulating fittings for electrical machines/appliances; conduit",
 }
 
-# StatCan's CIMT source carries a stale (pre-2007 HS) heading for 854449 — it
-# reads "≤ 80 V" but the current subheading 8544.49 is "≤ 1,000 V, not fitted
-# with connectors" (its HS-10 children span ≤600 V and 600–1,000 V). Correct the
-# HS-6 description on load so the categorization page and the filters show it right.
-HS6_DESC_FIX: dict[str, str] = {
-    "854449": "Insulated conductors, ≤ 1,000 V, not fitted with connectors",
-}
+# HS-6 descriptions come from the concordance (the source of truth), applied on
+# load. This also carries the 854449 correction — StatCan's CIMT source has a
+# stale pre-2007 "≤ 80 V" heading, but 8544.49 is now "≤ 1,000 V, not fitted with
+# connectors" (its HS-10 children span ≤600 V and 600–1,000 V).
+HS6_DESC_FIX: dict[str, str] = dict(zip(_CONC["hs6"], _CONC["hs6_desc"]))
 LOGO_PATH = ROOT / "assets" / "transition_accelerator.png"
 CANADA_GEOJSON = ROOT / "assets" / "canada.geojson"
 
@@ -178,37 +146,9 @@ REAL_BASIS = "2025 CAD"
 # cable +89%, copper +116%, wiring devices +38%, vs P73 +42%). See the IPPI page.
 IPPI_FILE = ROOT / "Statistics" / "IPPI_Statscan.csv"
 IPPI_FALLBACK = "P73"
-# Equipment category (name in equipment_categories.md) → NAPCS series code.
-IPPI_BY_CATEGORY: dict[str, str] = {
-    "Large Power Transformer (≥100 MVA)": "381221",
-    "Medium / Substation Transformer": "381221",
-    "High-Voltage Switchgear": "38123",
-    "Medium-Voltage Switchgear": "38123",
-    "Protection & Control panels": "38123",
-    "Disconnect Switches (HV/MV)": "38123",
-    "Underground / Submarine Cable": "38121",
-    "Static power converters (incl. HVDC)": "38125",
-    "Substation reactive-power equipment (shunt reactors, capacitor banks, SVC/STATCOM)": "38125",
-}
-# HS-6 overrides (win over category): overhead conductor priced by its metal,
-# and the raw-material feedstock codes, which track metal/mineral not equipment.
-IPPI_BY_HS6: dict[str, str] = {
-    # Overhead conductor: bare copper / aluminium conductor + steel towers
-    "741300": "322", "761410": "32711", "761490": "32711", "730820": "31212",
-    # Copper feedstock + winding wire
-    "740710": "322", "740811": "322", "740819": "322", "740821": "322", "740829": "322",
-    "854411": "322", "854419": "322",
-    # Aluminium feedstock
-    "760410": "32711", "760421": "32711", "760429": "32711",
-    "760511": "32711", "760519": "32711", "760521": "32711", "760529": "32711",
-    # Grain-oriented / silicon-electrical steel
-    "722511": "31212", "722519": "31212", "722611": "31212", "722619": "31212",
-    # Insulators + insulating fittings (ceramic / glass / mineral)
-    "854610": "29111", "854620": "29111", "854690": "29111",
-    "854710": "29111", "854720": "29111", "854790": "29111",
-    # Transformer / converter parts
-    "850490": "38122",
-}
+# The per-HS-6 → NAPCS deflator mapping now lives in concordance.csv
+# (ippi_napcs column) and is read by hs6_to_napcs(). IPPI_PAGE_ROWS below drives
+# only the IPPI page's summary display.
 # IPPI page display: (component label, HS scope, NAPCS code).
 IPPI_PAGE_ROWS: list[tuple[str, str, str]] = [
     ("Large power transformer (>100 MVA)", "8504.23", "381221"),
@@ -262,21 +202,11 @@ def load_ippi(sig: tuple | None = None) -> dict[str, dict]:
 
 @st.cache_data
 def hs6_to_napcs(cat_sig: tuple | None = None) -> dict[str, str]:
-    """Map every concordance HS-6 to the NAPCS IPPI series used to deflate it
-    (HS-6 override, else the code's equipment category, else the P73 aggregate)."""
-    cats = load_equipment_categories(
-        EQUIPMENT_CATEGORIES_FILE, _path_signature(EQUIPMENT_CATEGORIES_FILE)
-    )
-    whole_map, full_map, owner = _concordance_maps(cats)
-    m: dict[str, str] = {}
-    for h6 in set(whole_map) | {f[:6] for f in full_map}:
-        if h6 in IPPI_BY_HS6:
-            m[h6] = IPPI_BY_HS6[h6]
-        else:
-            cat = whole_map.get(h6) or owner.get(h6)
-            m[h6] = IPPI_BY_CATEGORY.get(cat, IPPI_FALLBACK)
-    m.update(IPPI_BY_HS6)  # ensure overrides present even if not in concordance
-    return m
+    """Map every concordance HS-6 to the NAPCS IPPI series used to deflate it —
+    read straight from the ippi_napcs column of concordance.csv (the source of
+    truth). ``cat_sig`` only busts the cache when inputs change."""
+    m = dict(zip(_CONC["hs6"], _CONC["ippi_napcs"]))
+    return {h6: (n or IPPI_FALLBACK) for h6, n in m.items()}
 
 
 def apply_deflation(frame: pd.DataFrame, basis: str) -> pd.DataFrame:
@@ -369,7 +299,7 @@ def load_data(
     if "hs6" in df.columns:
         # Sub-scale transformers + wholly-non-grid headings, dropped at HS-6 so
         # historical code-variants go too (keeps multi-year trends consistent).
-        df = df[~df["hs6"].isin(EXCLUDED_HS6 | EXCLUDED_HS6_NONGRID)].copy()
+        df = df[~df["hs6"].isin(DROP_HS6)].copy()
     # Drop detail codes outside the grid-relevant carve-out so every total —
     # including the "All" selection — sums only in-scope HS-10/HS-8 codes.
     # e.g. 850440 keeps grid converters/rectifiers/inverters but drops PC power
@@ -430,46 +360,35 @@ def load_hs_priority(path: Path) -> tuple[list[str], dict[str, str]]:
 def load_equipment_categories(
     path: Path, sig: tuple[str, float, int] | None = None
 ) -> list[dict]:
-    """Parse equipment_categories.md into grid-equipment categories.
+    """Grid-equipment categories derived from concordance.csv (the source of
+    truth). ``path``/``sig`` are unused by the body (kept for call-site
+    compatibility); the concordance now governs category assignment, and only
+    the ``## N.`` heading ORDER is read from equipment_categories.md so the
+    category filter keeps its familiar order.
 
-    ``sig`` is unused in the body; it only lets st.cache_data reparse when the
-    file changes (pass ``_path_signature(path)``).
-
-    Each ``## N. <Category Name>`` heading starts a category; the first column
-    of every markdown table row beneath it holds an HS code. Codes are
-    classified by length:
-      * 6 digits  → whole HS-6 (every detail code under it belongs)
-      * 8/10 digits → an HS-8 / HS-10 carve-out (only that detail code belongs)
-
-    Returns ``[{"name", "hs6": set, "full": set}]``. Non-numbered headings
-    (e.g. the "⚠ Flagged" review tables) are ignored so flagged codes aren't
-    double-counted.
+    Returns ``[{"name", "hs6": set, "full": set}]`` where hs6 = HS-6 taken whole
+    (or dropped wholesale but still owned by the category, shown struck on the
+    Equipment Categorization page) and full = HS-8/HS-10 carve-out detail codes.
     """
-    if not path.exists():
-        return []
-    out: list[dict] = []
-    cur: dict | None = None
-    head_re = re.compile(r"^##\s+\d+\.\s+(.+?)\s*$")
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if line.startswith("## "):
-            m = head_re.match(line)
+    order: list[str] = []
+    if path.exists():
+        head_re = re.compile(r"^##\s+\d+\.\s+(.+?)\s*$")
+        for ln in path.read_text(encoding="utf-8").splitlines():
+            m = head_re.match(ln.strip())
             if m:
-                cur = {"name": m.group(1).strip(), "hs6": set(), "full": set()}
-                out.append(cur)
-            else:
-                cur = None  # flag/notes section — stop collecting codes
+                order.append(m.group(1).strip())
+    cats: dict[str, dict] = {}
+    for r in _CONC.itertuples(index=False):
+        if not r.category:
             continue
-        if cur is None or not line.startswith("|"):
-            continue
-        code = line.strip("|").split("|")[0].strip().replace(" ", "")
-        if not code.isdigit():
-            continue
-        if len(code) == 6:
-            cur["hs6"].add(code)
-        elif len(code) in (8, 10):
-            cur["full"].add(code)
-    return [c for c in out if c["hs6"] or c["full"]]
+        c = cats.setdefault(r.category, {"name": r.category, "hs6": set(), "full": set()})
+        if r.hs6_rule in ("whole", "drop"):
+            c["hs6"].add(r.hs6)
+        elif r.hs6_rule == "carveout" and r.status != "not_used":
+            c["full"].add(r.hs_full)
+    ordered = [cats[n] for n in order if n in cats]
+    ordered += [c for n, c in cats.items() if n not in order]
+    return [c for c in ordered if c["hs6"] or c["full"]]
 
 
 @st.cache_data
@@ -2409,10 +2328,10 @@ def _concordance_xlsx(
 
     def _belongs(cat, h6):
         return (bool(_show(cat, h6)) or whole_map.get(h6) == cat
-                or (h6 in EXCLUDED_HS6 and owner.get(h6) == cat))
+                or (h6 in SUBSCALE_HS6 and owner.get(h6) == cat))
 
     def _status(hf, h6):
-        if h6 in EXCLUDED_HS6:
+        if h6 in SUBSCALE_HS6:
             return "Not used"
         if hf in EXCLUDED_HS10:
             return "Excluded"
@@ -2434,7 +2353,7 @@ def _concordance_xlsx(
         for hs4 in hs4s:
             for hs6 in sorted(ref[hs4]):
                 if not _belongs(cat, hs6):
-                    if hs6 in EXCLUDED_HS6:
+                    if hs6 in SUBSCALE_HS6:
                         note = "Excluded — sub-scale transformer (≤16 kVA)"
                     elif owner.get(hs6):
                         note = f"Used in: {owner[hs6]}"
@@ -2623,11 +2542,11 @@ def page_categorization():
         return (
             bool(show_h10(catname, h6))
             or whole_map.get(h6) == catname
-            or (h6 in EXCLUDED_HS6 and owner.get(h6) == catname)
+            or (h6 in SUBSCALE_HS6 and owner.get(h6) == catname)
         )
 
     def code_status(hf: str, h6: str) -> str:
-        if h6 in EXCLUDED_HS6:
+        if h6 in SUBSCALE_HS6:
             return "notused-sub"
         if hf in EXCLUDED_HS10:
             return "excluded"
@@ -2698,7 +2617,7 @@ def page_categorization():
                 d6 = hs6_desc(hs6)
                 if not belongs(name, hs6):
                     # Sibling HS-6 not in this category — struck, cross-referenced.
-                    if hs6 in EXCLUDED_HS6:
+                    if hs6 in SUBSCALE_HS6:
                         ref = "Excluded — sub-scale transformer (≤16 kVA)"
                     elif owner.get(hs6):
                         ref = f"Used in: {esc(owner[hs6])}"
@@ -2786,7 +2705,7 @@ def load_major_importers() -> pd.DataFrame:
     if not MAJOR_IMPORTERS_PARQUET.exists():
         return pd.DataFrame()
     df = pd.read_parquet(MAJOR_IMPORTERS_PARQUET)
-    return df[~df["hs6"].isin(EXCLUDED_HS6 | EXCLUDED_HS6_NONGRID)].copy()
+    return df[~df["hs6"].isin(DROP_HS6)].copy()
 
 
 def page_major_importers():
