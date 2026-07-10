@@ -30,8 +30,6 @@ ROOT = Path(__file__).parent
 LONG_PARQUET = ROOT / "cimt_output" / "cimt_trade_slim.parquet"
 LONG_CSV = ROOT / "cimt_output" / "cimt_trade_long.csv"
 COORDS_CSV = ROOT / "country_coords.csv"
-HS4_PRIORITY_FILE = ROOT / "hs_priority_4"
-HS6_PRIORITY_FILE = ROOT / "hs_priority_6.md"
 CATEGORIZATION_FILE = ROOT / "categorization.md"
 EQUIPMENT_CATEGORIES_FILE = ROOT / "equipment_categories.md"
 MAJOR_IMPORTERS_PARQUET = ROOT / "cimt_output" / "major_importers.parquet"
@@ -327,33 +325,6 @@ def load_canada_geojson() -> dict | None:
         return None
     import json
     return json.loads(CANADA_GEOJSON.read_text(encoding="utf-8"))
-
-
-@st.cache_data
-def load_hs_priority(path: Path) -> tuple[list[str], dict[str, str]]:
-    """Read HS code prefixes + optional descriptions from a text/md file."""
-    if not path.exists():
-        return [], {}
-    codes: list[str] = []
-    descriptions: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("//"):
-            continue
-        desc = ""
-        for sep in (";", "\t"):
-            if sep in line:
-                code_part, _, desc_part = line.partition(sep)
-                line, desc = code_part.strip(), desc_part.strip()
-                break
-        if line[:2].upper() == "HS":
-            line = line[2:].strip()
-        line = line.replace(".", "").replace(" ", "")
-        if line.isdigit():
-            codes.append(line)
-            if desc:
-                descriptions[line] = desc
-    return codes, descriptions
 
 
 @st.cache_data
@@ -656,11 +627,11 @@ def page_dashboard():
         hs10_desc = {}
         hs10_to_hs6 = {}
 
-    # HS-4 codes from the priority file; fall back to HS-4 prefixes that exist
-    # in the data when descriptions aren't available.
-    hs4_codes, hs4_desc = load_hs_priority(HS4_PRIORITY_FILE)
+    # HS-4 headings + display order from HS4_HEADINGS (the concordance's HS-4
+    # set); keep only the headings present in the current flow's data.
+    hs4_desc = HS4_HEADINGS
     hs4_in_data = sorted({c[:4] for c in all_hs6})
-    hs4_codes = [c for c in hs4_codes if c in hs4_in_data] or hs4_in_data
+    hs4_codes = [c for c in HS4_HEADINGS if c in hs4_in_data] or hs4_in_data
 
     # Grid-equipment categories from equipment_categories.md. Each maps to a
     # set of whole HS-6 codes plus (for transformers / converters) specific
@@ -2557,8 +2528,7 @@ def page_categorization():
         return "notused-carve"
 
     yr_lbl = latest_yr or ""
-    _, hs4_desc_pri = load_hs_priority(HS4_PRIORITY_FILE)
-    hs4_desc = {**hs4_desc_pri, **HS4_HEADINGS}
+    hs4_desc = HS4_HEADINGS
 
     _concordance_ctx = {
         "whole": whole_map, "full": full_map, "owner": owner, "ref": hs6ref,

@@ -74,10 +74,10 @@ YEARS = list(range(2016, 2026))
 # Trade flows to pull. Options: "imports", "total_exports", "domestic_exports"
 FLOWS = ["imports", "domestic_exports"]
 
-# Priority HS codes are read from this file at run time. Prefix match — list
-# HS-6 for category-level, HS-8/HS-10 for finer resolution. One code per line;
-# blank lines, '#' comments, and a leading "HS " prefix are all tolerated.
-HS_PRIORITY_FILE = Path("./hs_priority_6.md")
+# Extraction scope comes from the master concordance (concordance.csv, the
+# single source of truth): every unique HS-6 in it is used as a prefix match
+# against the CIMT bulk files, and its hs6_desc column labels the outputs.
+CONCORDANCE_FILE = Path("./concordance.csv")
 
 OUTPUT_DIR = Path("./cimt_output")
 DOWNLOAD_CACHE = Path("./cimt_cache")  # raw zips kept here so re-runs are fast
@@ -406,33 +406,18 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_hs_codes(path: Path) -> tuple[list[str], dict[str, str]]:
-    """Read HS code prefixes from a plain-text/markdown file. Tolerates a leading
-    'HS' prefix, embedded dots/spaces, blank lines, and '#' or '//' comments.
-    A line may carry an optional description after a ';' or tab separator."""
+    """Extraction scope from the master concordance (concordance.csv, the single
+    source of truth). Returns the unique HS-6 prefixes to pull from the CIMT bulk
+    files and {hs6: description} to label the outputs."""
     if not path.exists():
-        log.error(f"HS priority file not found: {path.resolve()}")
+        log.error(f"Concordance file not found: {path.resolve()}")
         sys.exit(1)
-    codes: list[str] = []
+    df = pd.read_csv(path, dtype=str).fillna("")
+    codes = sorted(c for c in df["hs6"].unique() if c and c.isdigit())
     descriptions: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("//"):
-            continue
-        desc = ""
-        for sep in (";", "\t"):
-            if sep in line:
-                code_part, _, desc_part = line.partition(sep)
-                line, desc = code_part.strip(), desc_part.strip()
-                break
-        if line[:2].upper() == "HS":
-            line = line[2:].strip()
-        line = line.replace(".", "").replace(" ", "")
-        if line.isdigit():
-            codes.append(line)
-            if desc:
-                descriptions[line] = desc
-        else:
-            log.warning(f"  ignored non-numeric HS line: {raw!r}")
+    for h6, desc in zip(df["hs6"], df["hs6_desc"]):
+        if h6 and desc and h6 not in descriptions:
+            descriptions[h6] = desc
     return codes, descriptions
 
 
@@ -442,12 +427,12 @@ def main():
     log.info(f"Years: {YEARS[0]}-{YEARS[-1]}  ({len(YEARS)} years)")
     log.info(f"Flows: {FLOWS}")
 
-    hs_prefixes, hs_descriptions = _load_hs_codes(HS_PRIORITY_FILE)
+    hs_prefixes, hs_descriptions = _load_hs_codes(CONCORDANCE_FILE)
     if not hs_prefixes:
-        log.error(f"No HS codes parsed from {HS_PRIORITY_FILE}")
+        log.error(f"No HS codes parsed from {CONCORDANCE_FILE}")
         sys.exit(1)
     log.info(
-        f"HS code prefixes: {len(hs_prefixes)} (from {HS_PRIORITY_FILE}), "
+        f"HS code prefixes: {len(hs_prefixes)} (from {CONCORDANCE_FILE}), "
         f"descriptions: {len(hs_descriptions)}"
     )
     log.info(f"Output dir: {OUTPUT_DIR.resolve()}")
